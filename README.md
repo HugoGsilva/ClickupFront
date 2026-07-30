@@ -88,6 +88,26 @@ minuto. Uma lista de 17 mil tarefas são ~170 requisições, uns 2 minutos. O ap
 - espera e repete sozinho quando toma rate limit (429), em vez de falhar;
 - guarda o arquivo gerado por 5 minutos — baixar a mesma lista de novo é instantâneo.
 
+## Diagnóstico (conferir os campos sem expor dados)
+
+```bash
+npm run diagnostico                     # primeira lista da pasta
+npm run diagnostico -- --lista 901234   # uma lista específica
+npm run diagnostico -- --amostra 20     # quantas tarefas analisar
+```
+
+Roda na sua máquina, com o seu token, e imprime um relatório do **formato** dos
+campos — nome, tipo, quantos vêm preenchidos e como cada um sai na planilha —
+com os **valores mascarados** (`texto ✓ (14 caracteres)` no lugar do CPF,
+`número ✓` no lugar do valor). Serve para validar a conversão e para pedir ajuda
+sem vazar nada: o relatório pode ser compartilhado como está.
+
+Também confirma se `CLICKUP_TOKEN` e `CLICKUP_FOLDER_ID` estão certos e lista os
+ids de todas as listas da pasta.
+
+Existe a flag `--sem-mascara`, que imprime os valores reais. É só para conferir
+localmente — o resultado **não** deve ser compartilhado.
+
 ## Testes
 
 ```bash

@@ -112,10 +112,10 @@ export async function getListFields(listId) {
  * Busca todas as tarefas da lista, paginando de 100 em 100 até a última página.
  * `onProgress` recebe o total acumulado a cada página.
  */
-export async function fetchAllTasks(listId, { onProgress, signal } = {}) {
+export async function fetchAllTasks(listId, { onProgress, signal, maxPages = MAX_PAGES } = {}) {
   const tasks = [];
 
-  for (let page = 0; page < MAX_PAGES; page++) {
+  for (let page = 0; page < Math.min(maxPages, MAX_PAGES); page++) {
     if (signal?.aborted) throw new ClickUpError('Exportação cancelada.', 499);
 
     const data = await request(`/list/${listId}/task`, {
