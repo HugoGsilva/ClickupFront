@@ -1,0 +1,303 @@
+import ExcelJS from 'exceljs';
+
+const MAX_CELL_LENGTH = 32_000; // limite do Excel é 32.767 caracteres por célula
+
+const PRIORITIES = {
+  urgent: 'Urgente',
+  high: 'Alta',
+  normal: 'Normal',
+  low: 'Baixa',
+};
+
+const CURRENCY_SYMBOLS = {
+  BRL: 'R$',
+  USD: 'US$',
+  EUR: '€',
+  GBP: '£',
+};
+
+const FORMATS = {
+  datetime: 'dd/mm/yyyy hh:mm',
+  date: 'dd/mm/yyyy',
+  number: '#,##0.##',
+  percent: '0"%"',
+};
+
+/**
+ * ExcelJS grava datas como se fossem UTC. Deslocamos pelo fuso do servidor para
+ * que a planilha mostre o mesmo horário que o ClickUp mostra na tela.
+ */
+function toExcelDate(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const ms = Number(raw);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+}
+
+function msToHours(raw) {
+  const ms = Number(raw);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.round((ms / 3_600_000) * 100) / 100;
+}
+
+function truncate(text) {
+  if (typeof text !== 'string') return text;
+  return text.length > MAX_CELL_LENGTH ? `${text.slice(0, MAX_CELL_LENGTH - 1)}…` : text;
+}
+
+function names(items, ...keys) {
+  if (!Array.isArray(items)) return '';
+  return items
+    .map((item) => {
+      if (item === null || item === undefined) return '';
+      if (typeof item !== 'object') return String(item);
+      for (const key of keys) {
+        if (item[key]) return String(item[key]);
+      }
+      return item.id ? String(item.id) : '';
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Encontra a opção de um campo drop_down pelo id ou pelo índice de ordenação. */
+function findOption(typeConfig, value) {
+  const options = typeConfig?.options || [];
+  return (
+    options.find((option) => option.id === value) ??
+    options.find((option) => String(option.orderindex) === String(value))
+  );
+}
+
+function optionLabel(option) {
+  if (!option) return null;
+  return option.name ?? option.label ?? null;
+}
+
+/**
+ * Converte o valor cru de um campo customizado no que deve aparecer na planilha.
+ * Cada tipo do ClickUp guarda o valor de um jeito diferente: drop_down guarda o
+ * id da opção, date guarda milissegundos, labels guarda um array de ids, etc.
+ */
+export function formatCustomFieldValue(field) {
+  const { type, value, type_config: typeConfig = {} } = field || {};
+  if (value === null || value === undefined || value === '') return null;
+
+  switch (type) {
+    case 'drop_down':
+      return optionLabel(findOption(typeConfig, value)) ?? String(value);
+
+    case 'labels': {
+      const ids = Array.isArray(value) ? value : [value];
+      return (
+        ids
+          .map((id) => optionLabel(findOption(typeConfig, id)) ?? String(id))
+          .filter(Boolean)
+          .join(', ') || null
+      );
+    }
+
+    case 'checkbox':
+      return value === true || value === 'true' ? 'Sim' : 'Não';
+
+    case 'date':
+      return toExcelDate(value);
+
+    case 'currency':
+    case 'number': {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : String(value);
+    }
+
+    case 'emoji': {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : String(value);
+    }
+
+    case 'users':
+      return names(Array.isArray(value) ? value : [value], 'username', 'email', 'name') || null;
+
+    case 'tasks':
+    case 'list_relationship':
+      return names(Array.isArray(value) ? value : [value], 'name') || null;
+
+    case 'attachment':
+    case 'files':
+      return names(Array.isArray(value) ? value : [value], 'url', 'title', 'name') || null;
+
+    case 'location':
+      return value.formatted_address || value.place_name || null;
+
+    case 'manual_progress':
+    case 'automatic_progress': {
+      const percent = Number(value.percent_complete ?? value.current);
+      return Number.isFinite(percent) ? percent : null;
+    }
+
+    case 'formula':
+    case 'rollup':
+      if (typeof value === 'object') return truncate(JSON.stringify(value));
+      return typeof value === 'number' ? value : String(value);
+
+    default:
+      if (typeof value === 'object') return truncate(JSON.stringify(value));
+      return truncate(String(value));
+  }
+}
+
+/** Formato de célula adequado ao tipo do campo customizado. */
+function customFieldFormat(field) {
+  switch (field.type) {
+    case 'date':
+      return field.type_config?.include_time === false ? FORMATS.date : FORMATS.datetime;
+    case 'currency': {
+      const symbol = CURRENCY_SYMBOLS[field.type_config?.currency_type] || '';
+      return symbol ? `"${symbol}" #,##0.00` : '#,##0.00';
+    }
+    case 'number':
+    case 'emoji':
+      return FORMATS.number;
+    case 'manual_progress':
+    case 'automatic_progress':
+      return FORMATS.percent;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Une as definições de campo da lista com os campos que realmente apareceram nas
+ * tarefas. A definição da lista manda na ordem; campos vindos só das tarefas
+ * (herdados de outro nível, por exemplo) entram no fim.
+ */
+function collectCustomFields(fieldDefinitions, tasks) {
+  const fields = new Map();
+
+  for (const definition of fieldDefinitions || []) {
+    if (definition?.id) fields.set(definition.id, definition);
+  }
+  for (const task of tasks) {
+    for (const field of task.custom_fields || []) {
+      if (field?.id && !fields.has(field.id)) fields.set(field.id, field);
+    }
+  }
+
+  return [...fields.values()];
+}
+
+function standardColumns(tasks) {
+  const hasCustomId = tasks.some((task) => task.custom_id);
+
+  const columns = [
+    { header: 'ID', width: 14, get: (task) => task.id },
+    ...(hasCustomId ? [{ header: 'ID customizado', width: 16, get: (task) => task.custom_id || '' }] : []),
+    { header: 'Nome', width: 45, get: (task) => truncate(task.name || '') },
+    { header: 'Status', width: 18, get: (task) => task.status?.status || '' },
+    { header: 'Prioridade', width: 12, get: (task) => PRIORITIES[task.priority?.priority] || task.priority?.priority || '' },
+    { header: 'Responsáveis', width: 24, get: (task) => names(task.assignees, 'username', 'email') },
+    { header: 'Tags', width: 20, get: (task) => names(task.tags, 'name') },
+    { header: 'Criada em', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_created) },
+    { header: 'Atualizada em', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_updated) },
+    { header: 'Início', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.start_date) },
+    { header: 'Prazo', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.due_date) },
+    { header: 'Concluída em', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_closed) },
+    { header: 'Tempo estimado (h)', width: 16, format: FORMATS.number, get: (task) => msToHours(task.time_estimate) },
+    { header: 'Tempo gasto (h)', width: 16, format: FORMATS.number, get: (task) => msToHours(task.time_spent) },
+    { header: 'Lista', width: 22, get: (task) => task.list?.name || '' },
+    { header: 'Tarefa pai', width: 14, get: (task) => task.parent || '' },
+    { header: 'Criada por', width: 20, get: (task) => task.creator?.username || task.creator?.email || '' },
+  ];
+
+  return columns;
+}
+
+function trailingColumns() {
+  return [
+    { header: 'Descrição', width: 50, get: (task) => truncate(task.text_content || task.description || '') },
+    { header: 'Link', width: 32, get: (task) => task.url || '' },
+  ];
+}
+
+function sanitizeSheetName(name) {
+  const clean = String(name || 'Tarefas')
+    .replace(/[\\/*?:[\]]/g, '-')
+    .trim();
+  return clean.slice(0, 31) || 'Tarefas';
+}
+
+/**
+ * Monta a planilha: colunas padrão + uma coluna por campo customizado + descrição
+ * e link no fim. Devolve o Buffer do arquivo .xlsx.
+ */
+export async function buildWorkbook({ list, tasks, fieldDefinitions = [] }) {
+  const customFields = collectCustomFields(fieldDefinitions, tasks);
+  const customFieldById = new Map();
+
+  const customColumns = customFields.map((definition) => {
+    customFieldById.set(definition.id, definition);
+    return {
+      header: definition.name || definition.id,
+      width: 22,
+      format: customFieldFormat(definition),
+      get: (task) => {
+        const field = (task.custom_fields || []).find((candidate) => candidate.id === definition.id);
+        if (!field) return null;
+        // A definição da lista traz o type_config completo; o da tarefa pode vir
+        // resumido, então damos preferência ao da lista para resolver as opções.
+        return formatCustomFieldValue({
+          ...field,
+          type: field.type || definition.type,
+          type_config: definition.type_config || field.type_config,
+        });
+      },
+    };
+  });
+
+  const columns = [...standardColumns(tasks), ...customColumns, ...trailingColumns()];
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'ClickUp Export';
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name), {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
+
+  sheet.columns = columns.map((column, index) => ({
+    header: column.header,
+    key: `c${index}`,
+    width: column.width,
+    style: column.format ? { numFmt: column.format } : undefined,
+  }));
+
+  for (const task of tasks) {
+    sheet.addRow(columns.map((column) => column.get(task) ?? null));
+  }
+
+  const header = sheet.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B3A55' } };
+  header.alignment = { vertical: 'middle', horizontal: 'left' };
+  header.height = 22;
+
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: columns.length },
+  };
+
+  return workbook.xlsx.writeBuffer();
+}
+
+/** Nome de arquivo seguro, no padrão NOME-DA-LISTA_2026-07-30.xlsx */
+export function buildFileName(listName) {
+  const slug = String(listName || 'tarefas')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toUpperCase() || 'TAREFAS';
+  const today = new Date().toISOString().slice(0, 10);
+  return `${slug}_${today}.xlsx`;
+}

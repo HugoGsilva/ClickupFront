@@ -1,0 +1,28 @@
+# Stack pronta para colar no Portainer (Stacks > Add stack > Web editor).
+# As variáveis abaixo são preenchidas na aba "Environment variables" do Portainer.
+services:
+  clickup-export:
+    build: .
+    # Se preferir não buildar no Portainer, publique a imagem e troque "build: ."
+    # por: image: ghcr.io/hugogsilva/clickupfront:latest
+    container_name: clickup-export
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      CLICKUP_TOKEN: ${CLICKUP_TOKEN}
+      CLICKUP_FOLDER_ID: ${CLICKUP_FOLDER_ID}
+      CLICKUP_INCLUDE_CLOSED: ${CLICKUP_INCLUDE_CLOSED:-true}
+      CLICKUP_INCLUDE_SUBTASKS: ${CLICKUP_INCLUDE_SUBTASKS:-true}
+      CLICKUP_INCLUDE_ARCHIVED: ${CLICKUP_INCLUDE_ARCHIVED:-false}
+      AUTH_USER: ${AUTH_USER}
+      AUTH_PASSWORD: ${AUTH_PASSWORD}
+      APP_TITLE: ${APP_TITLE:-Negócios Precatório}
+      TZ: ${TZ:-America/Sao_Paulo}
+      PORT: 3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

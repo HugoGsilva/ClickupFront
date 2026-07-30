@@ -1,0 +1,21 @@
+{
+  "name": "clickup-front",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Front-end com Basic Auth para visualizar listas do ClickUp e exportar tarefas (com campos customizados) para Excel",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node test/smoke.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2"
+  }
+}

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Exportar tarefas do ClickUp</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div>
+          <h1 id="title">Carregando…</h1>
+          <p class="subtitle" id="subtitle">Selecione um nome para baixar a planilha</p>
+        </div>
+        <button class="ghost" id="refresh" type="button" title="Recarregar as listas do ClickUp">
+          Atualizar
+        </button>
+      </div>
+    </header>
+
+    <main class="container">
+      <div class="search">
+        <input
+          id="search"
+          type="search"
+          placeholder="Buscar nome…"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Buscar nome"
+        />
+        <span class="search__count" id="count"></span>
+      </div>
+
+      <div id="feedback" class="feedback" hidden></div>
+
+      <ul class="lists" id="lists" aria-live="polite"></ul>
+
+      <p class="footnote">
+        A planilha traz os campos padrão da tarefa e todos os campos customizados da lista.
+        Listas muito grandes podem levar alguns minutos.
+      </p>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
