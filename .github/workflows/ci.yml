@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: clickup-export
+
+jobs:
+  testes:
+    name: Testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Sobem um ClickUp falso e validam Basic Auth, paginação, o conteúdo do
+      # .xlsx e a trava de somente-leitura. Não precisam de token nem de rede.
+      - run: npm test
+
+  imagem:
+    name: Publicar no Docker Hub
+    runs-on: ubuntu-latest
+    needs: testes
+    # Pull request não publica imagem — só valida.
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      # O secrets context não existe no "if" de um job, então a checagem vira
+      # um passo: sem credenciais o workflow avisa e para, em vez de falhar.
+      - name: Conferir credenciais do Docker Hub
+        id: credenciais
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Cadastre os secrets DOCKERHUB_USERNAME e DOCKERHUB_TOKEN em Settings > Secrets and variables > Actions para publicar a imagem."
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.credenciais.outputs.ok == 'true'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.credenciais.outputs.ok == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.credenciais.outputs.ok == 'true'
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Calcular as tags
+        id: meta
+        if: steps.credenciais.outputs.ok == 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Build e push
+        if: steps.credenciais.outputs.ok == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resumo
+        if: steps.credenciais.outputs.ok == 'true'
+        run: |
+          {
+            echo "### Imagem publicada"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "No Portainer: **Stacks > sua stack > Pull and redeploy**."
+          } >> "$GITHUB_STEP_SUMMARY"

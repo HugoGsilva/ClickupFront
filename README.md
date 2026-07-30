@@ -42,17 +42,40 @@ cp .env.example .env   # preencha o token, a pasta e a senha
 npm start              # http://localhost:3000
 ```
 
+## CI: imagem publicada automaticamente
+
+`.github/workflows/ci.yml` roda a cada push: primeiro os testes, e só se
+passarem ele builda a imagem (amd64 e arm64) e publica no Docker Hub.
+
+Configure uma vez, em **Settings > Secrets and variables > Actions**:
+
+| Secret | Valor |
+| --- | --- |
+| `DOCKERHUB_USERNAME` | seu usuário do Docker Hub |
+| `DOCKERHUB_TOKEN` | um *Access Token* criado em hub.docker.com > Account Settings > Personal access tokens (não use a senha da conta) |
+
+Sem esses secrets o workflow ainda roda os testes; ele só avisa que não vai
+publicar, em vez de falhar. Pull request nunca publica imagem.
+
+Tags geradas: `latest` (branch padrão), o nome da branch, o sha curto e a versão
+quando você criar uma tag `v*`.
+
 ## Deploy no Portainer
 
 1. **Stacks > Add stack > Web editor** e cole o conteúdo de `docker-compose.yml`.
 2. Na seção **Environment variables**, cadastre:
-   `CLICKUP_TOKEN`, `CLICKUP_FOLDER_ID`, `AUTH_USER`, `AUTH_PASSWORD`
-   (e `PORT` se quiser publicar em outra porta).
+
+   | Variável | Valor |
+   | --- | --- |
+   | `DOCKER_IMAGE` | `seuusuario/clickup-export:latest` |
+   | `CLICKUP_TOKEN` | o token `pk_...` |
+   | `CLICKUP_FOLDER_ID` | o id da pasta |
+   | `AUTH_USER` / `AUTH_PASSWORD` | o login da tela |
+   | `PORT` | opcional, se 3000 estiver ocupada |
+
 3. **Deploy the stack**.
 
-O compose usa `build: .`, então o Portainer precisa do repositório
-(*Repository* em vez de *Web editor*, apontando para este projeto). Se preferir
-usar uma imagem já publicada, troque `build: .` por `image: ...` no compose.
+Para atualizar depois de um push novo: **Stacks > sua stack > Pull and redeploy**.
 
 Health check em `GET /health` — único endpoint que responde sem autenticação,
 para o Docker conseguir monitorar o container.
