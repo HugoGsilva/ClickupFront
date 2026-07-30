@@ -15,6 +15,39 @@ export class ClickUpError extends Error {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Trava de segurança: este app é SOMENTE LEITURA.
+ *
+ * Exportar não precisa de nada além de GET. Qualquer POST/PUT/DELETE aqui seria
+ * um bug ou algo pior — e no ClickUp custaria dados de verdade. Em vez de
+ * confiar em "não escrevemos", o cofre fica na camada mais baixa: toda chamada
+ * passa por aqui, e só passa GET, sem corpo, para o host da API configurada.
+ *
+ * Exportada para o teste conseguir provar que a trava funciona.
+ */
+export function safeFetch(url, options = {}) {
+  const method = (options.method || 'GET').toUpperCase();
+
+  if (method !== 'GET') {
+    throw new ClickUpError(
+      `Bloqueado: tentativa de ${method} no ClickUp. Este app é somente leitura — ` +
+        'ele não cria, edita nem apaga nada.',
+      500,
+    );
+  }
+
+  if (options.body !== undefined && options.body !== null) {
+    throw new ClickUpError('Bloqueado: requisição de leitura não pode ter corpo.', 500);
+  }
+
+  const target = String(url);
+  if (!target.startsWith(API)) {
+    throw new ClickUpError(`Bloqueado: destino fora da API do ClickUp (${target.slice(0, 60)}).`, 500);
+  }
+
+  return fetch(target, { ...options, method: 'GET', body: undefined });
+}
+
+/**
  * Chamada à API do ClickUp com retry no rate limit (100 req/min por token).
  * Listas grandes consomem centenas de requisições, então isso não é opcional.
  */
@@ -26,10 +59,12 @@ async function request(pathname, params = {}, attempt = 0) {
 
   let res;
   try {
-    res = await fetch(url, {
+    res = await safeFetch(url, {
       headers: { Authorization: config.clickupToken, 'Content-Type': 'application/json' },
     });
   } catch (err) {
+    // Erro da trava de somente-leitura não é falha de rede: não se repete.
+    if (err instanceof ClickUpError) throw err;
     if (attempt < 3) {
       await sleep(1000 * 2 ** attempt);
       return request(pathname, params, attempt + 1);

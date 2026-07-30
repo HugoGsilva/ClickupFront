@@ -84,7 +84,11 @@ function makeTask(listId, listName, index) {
 }
 
 export function startFakeClickUp() {
+  /** Tudo que o app pediu, para o teste provar que só houve leitura. */
+  const requests = [];
+
   const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url });
     const url = new URL(req.url, 'http://localhost');
     const send = (body, status = 200) => {
       res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -130,7 +134,7 @@ export function startFakeClickUp() {
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address();
-      resolve({ server, base: `http://127.0.0.1:${port}` });
+      resolve({ server, base: `http://127.0.0.1:${port}`, requests });
     });
   });
 }

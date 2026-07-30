@@ -43,7 +43,9 @@ async function waitForServer(url, attempts = 60) {
   throw new Error(`servidor não subiu em ${url}`);
 }
 
-const { server: fake, base } = await startFakeClickUp();
+const { server: fake, base, requests } = await startFakeClickUp();
+// Também vale para este processo, que importa src/clickup.js direto nos testes da trava.
+process.env.CLICKUP_API_BASE = base;
 const port = 3999;
 const appUrl = `http://127.0.0.1:${port}`;
 
@@ -219,6 +221,41 @@ try {
     const progress = await res.json();
     assert.ok('fetched' in progress, 'o endpoint de progresso deveria responder');
     await download;
+  });
+
+  console.log('\nSomente leitura');
+
+  await test('o app só fez GET no ClickUp durante todos os testes', () => {
+    const escritas = requests.filter((request) => request.method !== 'GET');
+    assert.equal(
+      escritas.length,
+      0,
+      `houve ${escritas.length} requisição(ões) de escrita: ${escritas
+        .map((r) => `${r.method} ${r.path}`)
+        .join(', ')}`,
+    );
+    assert.ok(requests.length > 5, 'esperava várias leituras registradas');
+  });
+
+  await test('a trava recusa POST, PUT e DELETE', async () => {
+    const { safeFetch } = await import('../src/clickup.js');
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      assert.throws(
+        () => safeFetch(`${base}/list/901/task`, { method }),
+        /somente leitura/i,
+        `${method} deveria ser bloqueado`,
+      );
+    }
+  });
+
+  await test('a trava recusa corpo na requisição', async () => {
+    const { safeFetch } = await import('../src/clickup.js');
+    assert.throws(() => safeFetch(`${base}/list/901/task`, { body: '{}' }), /corpo/i);
+  });
+
+  await test('a trava recusa destino fora da API do ClickUp', async () => {
+    const { safeFetch } = await import('../src/clickup.js');
+    assert.throws(() => safeFetch('https://exemplo.invalido/roubo', {}), /fora da API/i);
   });
 
   await test('segundo download da mesma lista vem do cache', async () => {

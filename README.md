@@ -79,6 +79,17 @@ viram número (dá para somar). Cabeçalho congelado e autofiltro já vêm ligad
 Um campo customizado que apareça nas tarefas mas não na definição da lista
 (herdado de outro nível) também vira coluna, no fim do bloco de customizados.
 
+## Somente leitura
+
+O app **nunca escreve no ClickUp**. Isso não é uma promessa no README, é uma
+trava no código: toda chamada à API passa por `safeFetch` (`src/clickup.js`), que
+recusa qualquer método diferente de `GET`, recusa requisição com corpo e recusa
+destino fora da API do ClickUp. Um bug futuro, um copy-paste infeliz ou um id
+malicioso não conseguem criar, editar nem apagar nada.
+
+Os testes provam os dois lados: que as travas rejeitam `POST`/`PUT`/`PATCH`/
+`DELETE`, e que uma exportação completa não gerou nenhuma requisição de escrita.
+
 ## Listas grandes
 
 A API do ClickUp devolve 100 tarefas por requisição e limita 100 requisições por
