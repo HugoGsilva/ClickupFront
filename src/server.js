@@ -12,7 +12,9 @@ const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 
 
 const app = express();
 app.disable('x-powered-by');
-app.set('trust proxy', true);
+// Desligado por padrão: confiar no X-Forwarded-For sem proxy na frente deixa
+// qualquer cliente forjar o próprio IP e escapar do freio de força bruta.
+app.set('trust proxy', config.trustProxy);
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -26,7 +28,11 @@ app.get('/health', (req, res) => {
   res.json({ ok: configProblems().length === 0, uptime: Math.round(process.uptime()) });
 });
 
-app.use(basicAuth);
+// O middleware é async (o freio de força bruta espera antes de responder) e o
+// Express 4 não trata promise rejeitada sozinho.
+app.use((req, res, next) => {
+  basicAuth(req, res, next).catch(next);
+});
 
 // ---------------------------------------------------------------------------
 // Caches em memória

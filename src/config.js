@@ -17,6 +17,18 @@ export const config = {
   authUser: process.env.AUTH_USER || '',
   authPassword: process.env.AUTH_PASSWORD || '',
 
+  // Freio de força bruta no login.
+  authFailureDelayMs: Number(process.env.AUTH_FAILURE_DELAY_MS ?? 250),
+  authMaxDelayMs: Number(process.env.AUTH_MAX_DELAY_MS ?? 5000),
+  authMaxFailures: Number(process.env.AUTH_MAX_FAILURES ?? 20),
+  authBlockMs: Number(process.env.AUTH_BLOCK_SECONDS ?? 300) * 1000,
+  authWindowMs: Number(process.env.AUTH_WINDOW_SECONDS ?? 900) * 1000,
+
+  // Só ligue atrás de um proxy reverso de confiança: com isso o app passa a
+  // acreditar no X-Forwarded-For, que qualquer cliente pode forjar se o app
+  // estiver exposto direto.
+  trustProxy: (process.env.TRUST_PROXY || '').toLowerCase() === 'true',
+
   appTitle: process.env.APP_TITLE || 'Negócios Precatório',
   port: Number(process.env.PORT || 3000),
   listsCacheSeconds: Number(process.env.LISTS_CACHE_SECONDS ?? 60),

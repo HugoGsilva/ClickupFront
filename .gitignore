@@ -1,6 +1,10 @@
 node_modules/
+# Qualquer .env, não só o exato — .env.producao e .env.portainer também
+# guardam token, e são justamente os nomes que a documentação de deploy convida
+# a criar. Só o exemplo, sem segredo nenhum, é versionado.
 .env
-.env.local
+.env.*
+!.env.example
 *.log
 .DS_Store
 dist/

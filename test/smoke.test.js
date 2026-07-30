@@ -61,6 +61,10 @@ const child = spawn(process.execPath, ['src/server.js'], {
     PORT: String(port),
     LISTS_CACHE_SECONDS: '0',
     EXPORT_CACHE_SECONDS: '300',
+    // Freio de força bruta com números pequenos, para o teste ser rápido.
+    AUTH_MAX_FAILURES: '5',
+    AUTH_BLOCK_SECONDS: '2',
+    AUTH_FAILURE_DELAY_MS: '0',
     TZ: 'America/Sao_Paulo',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -258,6 +262,49 @@ try {
     assert.throws(() => safeFetch('https://exemplo.invalido/roubo', {}), /fora da API/i);
   });
 
+  // Achados da auditoria: a validação antiga era startsWith sobre a string crua,
+  // então normalização de caminho e host colado passavam.
+  // Precisa ser testado contra a base de produção (que tem caminho /api/v2): no
+  // ClickUp falso a base é só o host, e aí a origem inteira é a API mesmo.
+  await test('a trava recusa travessia de caminho para fora do prefixo', async () => {
+    const { dentroDaApi } = await import('../src/clickup.js');
+    const producao = new URL('https://api.clickup.com/api/v2');
+
+    assert.equal(dentroDaApi('https://api.clickup.com/api/v2/list/901/task', producao), true);
+    assert.equal(dentroDaApi('https://api.clickup.com/api/v2/../../roubo', producao), false);
+    assert.equal(dentroDaApi('https://api.clickup.com/api/v2/list/../../../roubo', producao), false);
+    assert.equal(dentroDaApi('https://api.clickup.com/api/v1/task/901', producao), false);
+    assert.equal(dentroDaApi('https://api.clickup.com/api/v2.atacante.com/x', producao), false);
+    assert.equal(dentroDaApi('https://outro.host/api/v2/list/901', producao), false);
+  });
+
+  await test('a trava recusa host colado no prefixo', async () => {
+    const { safeFetch } = await import('../src/clickup.js');
+    assert.throws(() => safeFetch(`${base}.dominio-do-atacante.com/x`, {}), /fora da API/i);
+    assert.throws(() => safeFetch('https://api.clickup.com.atacante.com/api/v2/x', {}), /fora da API/i);
+  });
+
+  await test('a trava recusa credenciais embutidas na URL', async () => {
+    const { safeFetch } = await import('../src/clickup.js');
+    assert.throws(() => safeFetch('https://usuario:senha@api.clickup.com/api/v2/x', {}), /fora da API/i);
+  });
+
+  await test('CLICKUP_API_BASE só aceita loopback', async () => {
+    const { resolveApiBase } = await import('../src/clickup.js');
+    const oficial = 'https://api.clickup.com/api/v2';
+    assert.equal(resolveApiBase('http://api.do-atacante.com'), oficial, 'host externo deveria ser ignorado');
+    assert.equal(resolveApiBase('nao-e-url'), oficial, 'lixo deveria ser ignorado');
+    assert.equal(resolveApiBase(''), oficial, 'sem override, usa a API oficial');
+    assert.equal(resolveApiBase('https://api.clickup.com.atacante.com'), oficial, 'host colado é ignorado');
+    assert.equal(resolveApiBase('http://127.0.0.1:9999'), 'http://127.0.0.1:9999', 'loopback é permitido');
+  });
+
+  await test('id com travessia é recusado antes de virar requisição', async () => {
+    const { getFolder, getListFields } = await import('../src/clickup.js');
+    await assert.rejects(() => getFolder('../v2/task/roubo'), /inválido/i);
+    await assert.rejects(() => getListFields('901/../../roubo'), /inválido/i);
+  });
+
   await test('segundo download da mesma lista vem do cache', async () => {
     const started = Date.now();
     const res = await fetch(`${appUrl}/api/lists/901/export.xlsx`, {
@@ -266,6 +313,33 @@ try {
     assert.equal(res.status, 200);
     await res.arrayBuffer();
     assert.ok(Date.now() - started < 1000, 'download em cache deveria ser imediato');
+  });
+
+  // Por último: este bloco bloqueia o IP de teste de propósito.
+  console.log('\nForça bruta');
+
+  const errada = `Basic ${Buffer.from(`${USER}:chute`).toString('base64')}`;
+
+  await test('depois de muitas senhas erradas o IP é bloqueado com 429', async () => {
+    let bloqueio = null;
+    for (let i = 0; i < 12 && !bloqueio; i++) {
+      const res = await fetch(`${appUrl}/api/lists`, { headers: { Authorization: errada } });
+      if (res.status === 429) bloqueio = res;
+      else assert.equal(res.status, 401, `tentativa ${i + 1} deveria ser 401 antes do bloqueio`);
+    }
+    assert.ok(bloqueio, 'esperava um 429 depois das tentativas');
+    assert.ok(Number(bloqueio.headers.get('retry-after')) > 0, 'faltou o cabeçalho Retry-After');
+  });
+
+  await test('durante o bloqueio nem a senha certa passa', async () => {
+    const res = await fetch(`${appUrl}/api/lists`, { headers: { Authorization: credentials } });
+    assert.equal(res.status, 429);
+  });
+
+  await test('o bloqueio expira sozinho e a senha certa volta a funcionar', async () => {
+    await sleep(2400); // AUTH_BLOCK_SECONDS=2
+    const res = await fetch(`${appUrl}/api/lists`, { headers: { Authorization: credentials } });
+    assert.equal(res.status, 200);
   });
 } finally {
   child.kill();

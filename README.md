@@ -104,14 +104,52 @@ Um campo customizado que apareça nas tarefas mas não na definição da lista
 
 ## Somente leitura
 
-O app **nunca escreve no ClickUp**. Isso não é uma promessa no README, é uma
-trava no código: toda chamada à API passa por `safeFetch` (`src/clickup.js`), que
-recusa qualquer método diferente de `GET`, recusa requisição com corpo e recusa
-destino fora da API do ClickUp. Um bug futuro, um copy-paste infeliz ou um id
-malicioso não conseguem criar, editar nem apagar nada.
+O app **nunca escreve no ClickUp**. Não é uma promessa no README, é uma trava no
+código: toda chamada à API passa por `safeFetch` (`src/clickup.js`), e a linha
+que importa é esta:
 
-Os testes provam os dois lados: que as travas rejeitam `POST`/`PUT`/`PATCH`/
-`DELETE`, e que uma exportação completa não gerou nenhuma requisição de escrita.
+```js
+return fetch(target, { ...options, method: 'GET', body: undefined });
+```
+
+As chaves literais vêm **depois** do spread, então vencem sempre. Mesmo que
+alguém consiga enganar as validações acima, o método que sai na rede continua
+sendo `GET`. Antes disso, a trava ainda recusa qualquer método diferente de
+`GET`, recusa requisição com corpo, e recusa destino que não caia dentro da API
+do ClickUp — comparando a URL **já normalizada**, origem e prefixo de caminho,
+para que nem travessia (`/api/v2/../../x`) nem host colado
+(`api.clickup.com.outra-coisa.com`) passem.
+
+Ids que entram no caminho da URL são validados contra `[A-Za-z0-9_-]+`, e o id
+de lista que vem do navegador é conferido contra as listas da pasta configurada
+antes de qualquer uso.
+
+`CLICKUP_API_BASE` existe só para os testes apontarem para um ClickUp falso e
+**só aceita 127.0.0.1** — qualquer outro valor é ignorado com um aviso. Sem esse
+limite ele seria um desvio silencioso: a trava compara o destino com essa mesma
+variável, então trocá-la mandaria o token para o host escolhido.
+
+Os testes cobrem os dois lados: as travas rejeitam `POST`/`PUT`/`PATCH`/`DELETE`,
+travessia de caminho, host colado e credenciais na URL — e uma exportação
+completa não gera nenhuma requisição de escrita (o ClickUp falso registra tudo
+que recebe).
+
+> O que a trava **não** protege é o token em si. Um token pessoal `pk_` do
+> ClickUp não tem escopo: quem conseguir lê-lo (pela UI do Portainer, por
+> `docker inspect`, por acesso ao container) escreve no ClickUp à vontade, por
+> fora deste app. Trate a variável como senha de administrador.
+
+## Proteção do login
+
+A credencial é única e compartilhada, então o login tem freio contra força
+bruta (`src/auth.js`): cada erro do mesmo IP dobra o atraso da resposta (até 5 s)
+e, passando de `AUTH_MAX_FAILURES`, o IP recebe `429` com `Retry-After` por
+`AUTH_BLOCK_SECONDS`. Acertar a senha limpa o histórico na hora, e toda falha
+é registrada no log. A comparação de usuário e senha é em tempo constante.
+
+`TRUST_PROXY` vem desligado: só ligue se houver um proxy reverso de confiança na
+frente. Ligado sem proxy, qualquer cliente forja o `X-Forwarded-For` e escapa do
+freio.
 
 ## Listas grandes
 
