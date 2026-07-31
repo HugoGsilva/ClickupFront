@@ -705,6 +705,35 @@ try {
     await assert.rejects(() => getListFields('901/../../roubo'), /inválido/i);
   });
 
+  await test('Atualizar invalida também as planilhas guardadas', async () => {
+    const chamadas = () => requests.filter((r) => r.path.includes('/list/901/task')).length;
+    const baixar = async () => {
+      const res = await fetch(`${appUrl}/api/lists/901/export.xlsx`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      await res.arrayBuffer();
+    };
+    const atualizar = () =>
+      fetch(`${appUrl}/api/lists?refresh=1`, { headers: { Authorization: credentials } });
+
+    // Parte do zero: testes anteriores já deixaram esta lista em cache.
+    await atualizar();
+    const zero = chamadas();
+    await baixar();
+    const depoisDaPrimeira = chamadas();
+    assert.ok(depoisDaPrimeira > zero, 'depois de Atualizar, a planilha tinha que ser refeita');
+
+    // Sem Atualizar: vem do cache, sem tocar na API.
+    await baixar();
+    assert.equal(chamadas(), depoisDaPrimeira, 'a segunda deveria vir do cache');
+
+    // Com Atualizar de novo: descarta o cache e refaz.
+    await atualizar();
+    await baixar();
+    assert.ok(chamadas() > depoisDaPrimeira, 'Atualizar deveria ter descartado o cache');
+  });
+
   await test('segundo download da mesma lista vem do cache', async () => {
     const started = Date.now();
     const res = await fetch(`${appUrl}/api/lists/901/export.xlsx`, {

@@ -87,11 +87,29 @@ async function loadCatalog({ force = false } = {}) {
   const fresh = folderCache && Date.now() - folderCache.at < config.listsCacheSeconds * 1000;
   if (fresh && !force) return folderCache.data;
 
+  if (force) {
+    // Quem clica em "Atualizar" quer o estado novo do ClickUp. Recarregar só os
+    // nomes e as contagens deixava as planilhas guardadas por 5 minutos
+    // intactas: a pessoa via a contagem subir, baixava e recebia o arquivo
+    // antigo — achando que estava atualizado.
+    for (const [chave, entry] of exportCache) {
+      exportCache.delete(chave);
+      apagarDepois(entry.filePath);
+    }
+  }
+
   let catalog;
   if (config.listIds.length) {
     // Listas avulsas vindas do ambiente: uma chamada por lista.
     const lists = await Promise.all(config.listIds.map((id) => getList(id)));
-    catalog = { id: null, name: config.appTitle, lists };
+    catalog = {
+      id: null,
+      name: config.appTitle,
+      // A ordem de CLICKUP_LIST_IDS manda na tela. Sem isto valeria o
+      // orderindex interno do ClickUp, e a tela sairia numa ordem que não tem
+      // relação nenhuma com a que foi configurada.
+      lists: lists.map((list, indice) => ({ ...list, orderindex: indice })),
+    };
   } else {
     // Uma chamada só traz a pasta com todas as listas e suas contagens; o
     // recorte de quais aparecem é feito aqui, sem gastar mais requisição.
