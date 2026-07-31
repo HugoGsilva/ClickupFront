@@ -101,7 +101,10 @@ function rememberExport(chave, entry) {
   while (exportCache.size > MAX_EXPORT_CACHE) {
     const [maisAntiga, valor] = [...exportCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     exportCache.delete(maisAntiga);
-    fsp.unlink(valor.filePath).catch(() => {});
+
+    // Apagar na hora cortaria um download em andamento no meio: alguém pode
+    // estar baixando este arquivo agora. Um minuto é folga de sobra.
+    setTimeout(() => fsp.unlink(valor.filePath).catch(() => {}), 60_000).unref();
   }
 }
 
@@ -195,16 +198,29 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
       });
     }
 
-    const resumo = await writeWorkbook({
-      filePath,
-      sheets,
-      onProgress: ({ total }) => {
-        // `total` é o acumulado da aba atual; somamos com o que já foi fechado.
-        setProgress(token, { fetched: jaEscritas + total });
-      },
-    });
+    // Progresso somando TODAS as abas. Guardar só o acumulado da aba atual faria
+    // a barra voltar para o começo a cada lista nova.
+    const porAba = new Map();
 
-    // Recontagem final, agora que todas as abas fecharam.
+    let resumo;
+    try {
+      resumo = await writeWorkbook({
+        filePath,
+        sheets,
+        onProgress: ({ list, total }) => {
+          porAba.set(list?.id || list?.name, total);
+          let soma = 0;
+          for (const parcial of porAba.values()) soma += parcial;
+          setProgress(token, { fetched: soma });
+        },
+      });
+    } catch (err) {
+      // Sem isso, cada exportação que falha no meio deixa um arquivo parcial no
+      // disco do container para sempre.
+      await fsp.unlink(filePath).catch(() => {});
+      throw err;
+    }
+
     jaEscritas = resumo.reduce((soma, aba) => soma + aba.tasks, 0);
 
     const { size } = await fsp.stat(filePath);
@@ -285,7 +301,18 @@ function sendWorkbook(res, { filePath, fileName, size }) {
     `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
   );
   if (size) res.setHeader('Content-Length', String(size));
-  return fs.createReadStream(filePath).pipe(res);
+
+  const stream = fs.createReadStream(filePath);
+
+  // Um stream sem listener de 'error' derruba o processo inteiro: se o arquivo
+  // sumir do disco entre a geração e o envio, o container reiniciava.
+  stream.on('error', (err) => {
+    console.error(`[erro] falha ao ler ${filePath}: ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ error: 'Falha ao ler o arquivo gerado.' });
+    else res.destroy(err);
+  });
+
+  return stream.pipe(res);
 }
 
 app.use(express.static(publicDir, { index: 'index.html', extensions: ['html'] }));

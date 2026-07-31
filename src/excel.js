@@ -226,11 +226,27 @@ function trailingColumns() {
   ];
 }
 
-function sanitizeSheetName(name) {
-  const clean = String(name || 'Tarefas')
+/**
+ * Nome de aba aceito pelo Excel: sem os caracteres proibidos, no máximo 31
+ * caracteres e único no arquivo — nomes repetidos (ou que ficam iguais depois do
+ * corte em 31) fazem o exceljs recusar a aba e a exportação inteira falhar.
+ */
+function sanitizeSheetName(name, usados) {
+  const limpo = String(name || 'Tarefas')
     .replace(/[\\/*?:[\]]/g, '-')
     .trim();
-  return clean.slice(0, 31) || 'Tarefas';
+  let candidato = limpo.slice(0, 31) || 'Tarefas';
+
+  if (usados) {
+    let sufixo = 2;
+    while (usados.has(candidato.toLowerCase())) {
+      const marca = ` (${sufixo++})`;
+      candidato = `${limpo.slice(0, 31 - marca.length)}${marca}`;
+    }
+    usados.add(candidato.toLowerCase());
+  }
+
+  return candidato;
 }
 
 /**
@@ -287,6 +303,7 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
   workbook.created = new Date();
 
   const resumo = [];
+  const nomesUsados = new Set();
 
   for (const { list, fieldDefinitions = [], pages } of sheets) {
     const iterator = pages[Symbol.asyncIterator]();
@@ -296,7 +313,7 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
     const primeiraPagina = primeira.done ? [] : primeira.value;
 
     const columns = buildColumns(fieldDefinitions, primeiraPagina);
-    const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name), {
+    const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name, nomesUsados), {
       views: [{ state: 'frozen', ySplit: 1 }],
     });
 

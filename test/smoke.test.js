@@ -301,6 +301,33 @@ try {
     }
   });
 
+  await test('listas com o mesmo nome não quebram o arquivo', async () => {
+    const { writeWorkbook } = await import('../src/excel.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+    const file = path.join(dir, 'repetidas.xlsx');
+
+    const tarefa = { id: 't1', name: 'x', custom_fields: [] };
+    const pagina = async function* () {
+      yield [tarefa];
+    };
+
+    await writeWorkbook({
+      filePath: file,
+      sheets: [
+        { list: { name: 'ANA' }, pages: pagina() },
+        { list: { name: 'ANA' }, pages: pagina() },
+        { list: { name: 'ANA' }, pages: pagina() },
+      ],
+    });
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(file);
+    assert.deepEqual(
+      wb.worksheets.map((sheet) => sheet.name),
+      ['ANA', 'ANA (2)', 'ANA (3)'],
+    );
+  });
+
   await test('o progresso é reportado durante a exportação', async () => {
     const token = 'token-de-teste';
     const download = fetch(`${appUrl}/api/lists/902/export.xlsx?p=${token}&nocache=1`, {
