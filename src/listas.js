@@ -37,6 +37,15 @@ export const LISTAS_PADRAO = [
 export const IDS_PADRAO = LISTAS_PADRAO.map((lista) => lista.id);
 
 /**
+ * Campos customizados que NÃO devem virar coluna.
+ *
+ * Por padrão todo campo customizado é exportado, inclusive os que vêm sempre
+ * vazios — a planilha reflete a estrutura da lista. Quem entrar aqui fica de
+ * fora. Use o nome exato como aparece no ClickUp.
+ */
+export const CAMPOS_OCULTOS = [];
+
+/**
  * Ordem das colunas de campo customizado na planilha.
  *
  * É a ordem que aparece no ClickUp: primeiro os campos da própria lista, depois

@@ -241,6 +241,40 @@ try {
     assert.deepEqual(configurados, esperados);
   });
 
+  await test('CAMPOS_OCULTOS tira a coluna da planilha', async () => {
+    const { writeWorkbook } = await import('../src/excel.js');
+    const listas = await import('../src/listas.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+    const file = path.join(dir, 'oculto.xlsx');
+
+    listas.CAMPOS_OCULTOS.push('CPF'); // como se estivesse escrito no arquivo
+    try {
+      await writeWorkbook({
+        filePath: file,
+        sheets: [
+          {
+            list: { name: 'TESTE' },
+            fieldDefinitions: [
+              { id: 'a', name: 'CPF', type: 'short_text', type_config: {} },
+              { id: 'b', name: 'Cidade', type: 'short_text', type_config: {} },
+            ],
+            pages: (async function* () {
+              yield [{ id: 't1', name: 'x', custom_fields: [{ id: 'b', type: 'short_text', value: 'Goiânia' }] }];
+            })(),
+          },
+        ],
+      });
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(file);
+      const headers = wb.worksheets[0].getRow(1).values.slice(1);
+      assert.ok(!headers.includes('CPF'), 'campo oculto não deveria virar coluna');
+      assert.ok(headers.includes('Cidade'), 'os outros campos continuam');
+    } finally {
+      listas.CAMPOS_OCULTOS.length = 0;
+    }
+  });
+
   await test('campo do tipo button não vira coluna', () => {
     const headers = sheet.getRow(1).values.slice(1);
     assert.ok(!headers.includes('Botão de ação'), 'campo button não deveria virar coluna');

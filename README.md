@@ -127,7 +127,25 @@ tempos, Descrição, Link) **não são exportadas** — por decisão de escopo, 
 vinham vazias nesta operação. Para trazer alguma de volta, é uma linha em
 `standardColumns()` (`src/excel.js`), com o exemplo pronto no comentário.
 
-Um campo customizado que exista nas tarefas mas não esteja em `ORDEM_DOS_CAMPOS`
+### Mudar as colunas
+
+Tudo fica em **`src/listas.js`**, sem tocar na lógica:
+
+| O que você quer | Onde mexer |
+| --- | --- |
+| Reordenar as colunas | mude a ordem de `ORDEM_DOS_CAMPOS` |
+| Tirar um campo da planilha | acrescente o nome dele em `CAMPOS_OCULTOS` |
+| Incluir um campo novo do ClickUp | **nada** — ele aparece sozinho, no fim |
+| Colocar o campo novo numa posição | acrescente o nome em `ORDEM_DOS_CAMPOS` |
+
+Trazer de volta uma coluna padrão do ClickUp (Status, Link, Responsáveis…) é uma
+linha em `standardColumns()`, em `src/excel.js`, com o exemplo pronto no
+comentário.
+
+Depois de editar: `git push` → o CI publica a imagem → *Pull and redeploy* no
+Portainer.
+
+Campo customizado que exista nas tarefas mas não esteja em `ORDEM_DOS_CAMPOS`
 não é descartado: entra no fim. Assim um campo novo criado no ClickUp aparece na
 planilha sem ninguém precisar lembrar de atualizar o código.
 

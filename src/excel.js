@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { ORDEM_DOS_CAMPOS } from './listas.js';
+import { ORDEM_DOS_CAMPOS, CAMPOS_OCULTOS } from './listas.js';
 
 const MAX_CELL_LENGTH = 32_000; // limite do Excel é 32.767 caracteres por célula
 
@@ -188,8 +188,13 @@ function collectCustomFields(fieldDefinitions, tasks) {
     }
   }
 
-  // Botão é ação da interface, não dado: não vira coluna.
-  const encontrados = [...fields.values()].filter((definition) => definition.type !== 'button');
+  const encontrados = [...fields.values()].filter(
+    (definition) =>
+      // Botão é ação da interface, não dado.
+      definition.type !== 'button' &&
+      // E o que estiver na lista de ocultos de src/listas.js.
+      !CAMPOS_OCULTOS.includes(definition.name),
+  );
 
   // Ordem definida em src/listas.js. Quem não está lá vai para o fim, em vez de
   // sumir — assim um campo novo no ClickUp aparece na planilha sem ninguém
