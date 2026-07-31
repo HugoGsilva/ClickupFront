@@ -47,6 +47,39 @@ export class ClickUpError extends Error {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Orçamento de requisições, compartilhado por TODAS as exportações do processo.
+ *
+ * O token do ClickUp aceita 100 requisições por minuto. Exportar a pasta
+ * inteira consome ~950 — ou seja, os 9 minutos já são o orçamento inteiro. Sem
+ * isto, alguém clicando em "Baixar Excel" durante um "Baixar tudo" empurrava os
+ * dois para 429, e o 429 repetido acabava matando a exportação longa.
+ *
+ * Em vez de reagir ao 429, o app se mantém abaixo do limite: as chamadas
+ * esperam a sua vez numa fila única. Fica um pouco mais lento sob concorrência,
+ * e para de falhar.
+ */
+const LIMITE_POR_MINUTO = Number(process.env.CLICKUP_REQS_POR_MINUTO ?? 90);
+const carimbos = [];
+let fila = Promise.resolve();
+
+async function aguardarVez() {
+  const minhaVez = fila.then(async () => {
+    for (;;) {
+      const agora = Date.now();
+      while (carimbos.length && agora - carimbos[0] > 60_000) carimbos.shift();
+      if (carimbos.length < LIMITE_POR_MINUTO) {
+        carimbos.push(agora);
+        return;
+      }
+      await sleep(Math.max(50, 60_000 - (agora - carimbos[0])));
+    }
+  });
+  // A fila segue mesmo se esta chamada falhar.
+  fila = minhaVez.catch(() => {});
+  return minhaVez;
+}
+
 const API_URL = new URL(API);
 
 /**
@@ -136,6 +169,8 @@ async function request(pathname, params = {}, attempt = 0) {
     if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
   }
 
+  await aguardarVez();
+
   let res;
   try {
     res = await safeFetch(url, {
@@ -151,7 +186,7 @@ async function request(pathname, params = {}, attempt = 0) {
     throw new ClickUpError(`Falha de rede ao falar com o ClickUp: ${err.message}`, 502);
   }
 
-  if (res.status === 429 && attempt < 6) {
+  if (res.status === 429 && attempt < 12) {
     const reset = Number(res.headers.get('x-ratelimit-reset'));
     const retryAfter = Number(res.headers.get('retry-after'));
     let waitMs = 5000;

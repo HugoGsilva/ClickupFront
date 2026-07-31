@@ -122,6 +122,8 @@ export function formatCustomFieldValue(field) {
       return names(Array.isArray(value) ? value : [value], 'url', 'title', 'name') || null;
 
     case 'location':
+      // Alguns campos de local vêm como texto simples em vez de objeto.
+      if (typeof value === 'string') return value;
       return value.formatted_address || value.place_name || null;
 
     // Botão de ação da interface do ClickUp: não carrega dado. A coluna existe
@@ -132,7 +134,9 @@ export function formatCustomFieldValue(field) {
 
     case 'manual_progress':
     case 'automatic_progress': {
-      const percent = Number(value.percent_complete ?? value.current);
+      // Pode vir como objeto {percent_complete} ou como número puro.
+      const bruto = typeof value === 'object' ? (value.percent_complete ?? value.current) : value;
+      const percent = Number(bruto);
       return Number.isFinite(percent) ? percent : null;
     }
 

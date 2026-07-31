@@ -294,6 +294,27 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
   }
 }
 
+/**
+ * `?async=1` responde 202 na hora e gera em segundo plano; o cliente acompanha
+ * por /api/progress e, quando terminar, pede o arquivo de novo (que vem do
+ * cache, instantâneo).
+ *
+ * Existe porque exportar a pasta inteira leva ~9 minutos numa única requisição
+ * HTTP, e qualquer intermediário com teto de resposta — Cloudflare corta em
+ * 100 s — mataria a conexão antes do fim. Assim nenhuma requisição fica aberta
+ * por mais que alguns segundos.
+ */
+function despachar(res, token, gerar) {
+  if (res.req.query.async === '1') {
+    gerar().catch((err) => {
+      setProgress(token, { done: true, error: err.message });
+      console.error(`[export] falhou em segundo plano: ${err.message}`);
+    });
+    return res.status(202).json({ status: 'gerando' });
+  }
+  return gerar().then((entry) => sendWorkbook(res, entry));
+}
+
 // Uma lista só.
 app.get('/api/lists/:listId/export.xlsx', async (req, res, next) => {
   const { listId } = req.params;
@@ -308,13 +329,14 @@ app.get('/api/lists/:listId/export.xlsx', async (req, res, next) => {
       return res.status(404).json({ error: 'Lista não encontrada no escopo configurado.' });
     }
 
-    const entry = await gerarExport({
-      chave: `lista:${listId}`,
-      nomeArquivo: buildFileName(list.name),
-      lists: [list],
-      token,
-    });
-    return await sendWorkbook(res, entry);
+    return await despachar(res, token, () =>
+      gerarExport({
+        chave: `lista:${listId}`,
+        nomeArquivo: buildFileName(list.name),
+        lists: [list],
+        token,
+      }),
+    );
   } catch (err) {
     setProgress(token, { done: true, error: err.message });
     return next(err);
@@ -332,13 +354,14 @@ app.get('/api/export-all.xlsx', async (req, res, next) => {
       return res.status(404).json({ error: 'Nenhuma lista no escopo configurado.' });
     }
 
-    const entry = await gerarExport({
-      chave: 'tudo',
-      nomeArquivo: buildFileName(catalog.name || 'tudo'),
-      lists,
-      token,
-    });
-    return await sendWorkbook(res, entry);
+    return await despachar(res, token, () =>
+      gerarExport({
+        chave: 'tudo',
+        nomeArquivo: buildFileName(catalog.name || 'tudo'),
+        lists,
+        token,
+      }),
+    );
   } catch (err) {
     setProgress(token, { done: true, error: err.message });
     return next(err);
@@ -391,7 +414,11 @@ app.use(express.static(publicDir, { index: 'index.html', extensions: ['html'] })
 // ---------------------------------------------------------------------------
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
-  const status = err instanceof ClickUpError ? err.status || 502 : 500;
+  // Um 401/403 do ClickUp (token errado ou sem permissão) não pode sair como
+  // 401 do app: o navegador pediria a senha de novo e mandaria o usuário
+  // diagnosticar o lado errado do problema.
+  let status = err instanceof ClickUpError ? err.status || 502 : 500;
+  if (status === 401 || status === 403) status = 502;
   console.error(`[erro ${status}] ${req.method} ${req.path} — ${err.message}`);
   res.status(status).json({ error: err.message || 'Erro inesperado.' });
 });
@@ -407,10 +434,20 @@ if (problems.length) {
   process.exit(1);
 }
 
-app.listen(config.port, () => {
+const servidor = app.listen(config.port, () => {
   console.log(`ClickUp Export rodando em http://localhost:${config.port}`);
   const escopo = config.listIds.length
     ? `listas: ${config.listIds.join(', ')}`
     : `pasta: ${config.folderId}`;
   console.log(`Escopo — ${escopo} | usuário: ${config.authUser}`);
 });
+
+// Deploy com `order: start-first` manda SIGTERM no container antigo. Sem isto o
+// Node sai na hora e derruba downloads em andamento no meio.
+for (const sinal of ['SIGTERM', 'SIGINT']) {
+  process.on(sinal, () => {
+    console.log(`${sinal} recebido: parando de aceitar conexões e terminando as em curso.`);
+    servidor.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 30_000).unref();
+  });
+}

@@ -391,6 +391,59 @@ try {
     );
   });
 
+  await test('modo assíncrono responde na hora e o arquivo sai depois', async () => {
+    const token = 'token-async';
+    const inicio = Date.now();
+
+    // Passo 1: dispara e volta imediatamente, sem segurar a conexão.
+    const disparo = await fetch(`${appUrl}/api/lists/902/export.xlsx?p=${token}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(disparo.status, 202);
+    assert.equal((await disparo.json()).status, 'gerando');
+    assert.ok(Date.now() - inicio < 2000, 'o 202 tem que ser imediato');
+
+    // Passo 2: acompanha até terminar.
+    let pronto = false;
+    for (let i = 0; i < 60 && !pronto; i++) {
+      await sleep(200);
+      const res = await fetch(`${appUrl}/api/progress/${token}`, {
+        headers: { Authorization: credentials },
+      });
+      const progresso = await res.json();
+      assert.ok(!progresso.error, `erro na geração: ${progresso.error}`);
+      pronto = progresso.done;
+    }
+    assert.ok(pronto, 'a geração não terminou');
+
+    // Passo 3: o arquivo vem do cache.
+    const arquivo = await fetch(`${appUrl}/api/lists/902/export.xlsx`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(arquivo.status, 200);
+    const buf = Buffer.from(await arquivo.arrayBuffer());
+    assert.equal(buf.subarray(0, 2).toString(), 'PK', 'deveria ser um .xlsx válido');
+  });
+
+  await test('modo assíncrono reporta a falha em vez de ficar preso', async () => {
+    const token = 'token-async-erro';
+    const disparo = await fetch(`${appUrl}/api/lists/903/export.xlsx?p=${token}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(disparo.status, 202);
+
+    let erro = null;
+    for (let i = 0; i < 60 && !erro; i++) {
+      await sleep(200);
+      const res = await fetch(`${appUrl}/api/progress/${token}`, {
+        headers: { Authorization: credentials },
+      });
+      const progresso = await res.json();
+      if (progresso.error) erro = progresso.error;
+    }
+    assert.match(erro || '', /incompleta/i, 'o erro tem que chegar pelo progresso');
+  });
+
   await test('o progresso é reportado durante a exportação', async () => {
     const token = 'token-de-teste';
     const download = fetch(`${appUrl}/api/lists/902/export.xlsx?p=${token}&nocache=1`, {

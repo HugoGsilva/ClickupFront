@@ -97,6 +97,17 @@ function fileNameFrom(disposition, fallback) {
   return plain ? plain[1] : fallback;
 }
 
+/** Extrai a mensagem de erro que o servidor manda em JSON. */
+async function erroDe(res) {
+  try {
+    const body = await res.json();
+    if (body.error) return new Error(body.error);
+  } catch {
+    /* resposta sem JSON */
+  }
+  return new Error(`Falha ao exportar (HTTP ${res.status}).`);
+}
+
 function saveBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -155,20 +166,37 @@ async function baixar({ url, button, status, bar, totalEsperado, nomeFallback })
   }, 900);
 
   try {
-    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}p=${token}`, {
-      cache: 'no-store',
+    const separador = url.includes('?') ? '&' : '?';
+
+    // Passo 1: dispara a geração e recebe 202 na hora. A requisição não fica
+    // aberta pelos minutos que a exportação leva, então nenhum proxy no caminho
+    // (Cloudflare corta em 100 s) derruba a conexão no meio.
+    const inicio = await fetch(`${url}${separador}p=${token}&async=1`, { cache: 'no-store' });
+    if (!inicio.ok && inicio.status !== 202) throw await erroDe(inicio);
+
+    // Passo 2: espera terminar, acompanhando pelo progresso.
+    await new Promise((resolve, reject) => {
+      const espera = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/progress/${token}`, { cache: 'no-store' });
+          if (!res.ok) return;
+          const progresso = await res.json();
+          if (progresso.error) {
+            clearInterval(espera);
+            reject(new Error(progresso.error));
+          } else if (progresso.done) {
+            clearInterval(espera);
+            resolve();
+          }
+        } catch {
+          /* erro de rede no polling: tenta de novo no próximo tique */
+        }
+      }, 1000);
     });
 
-    if (!res.ok) {
-      let message = `Falha ao exportar (HTTP ${res.status}).`;
-      try {
-        const body = await res.json();
-        if (body.error) message = body.error;
-      } catch {
-        /* resposta sem JSON */
-      }
-      throw new Error(message);
-    }
+    // Passo 3: o arquivo já está pronto e vem do cache, na hora.
+    const res = await fetch(`${url}${separador}p=${token}`, { cache: 'no-store' });
+    if (!res.ok) throw await erroDe(res);
 
     const blob = await res.blob();
     saveBlob(blob, fileNameFrom(res.headers.get('Content-Disposition'), nomeFallback));
