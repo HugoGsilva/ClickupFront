@@ -8,6 +8,9 @@ const els = {
   lists: document.getElementById('lists'),
   feedback: document.getElementById('feedback'),
   refresh: document.getElementById('refresh'),
+  baixarTudo: document.getElementById('baixar-tudo'),
+  tudoDetalhe: document.getElementById('tudo-detalhe'),
+  tudoProgresso: document.getElementById('tudo-progresso'),
 };
 
 let allLists = [];
@@ -70,7 +73,7 @@ function rowFor(list) {
   button.className = 'download';
   button.type = 'button';
   button.textContent = 'Baixar Excel';
-  button.addEventListener('click', () => download(list, { button, status, row }));
+  button.addEventListener('click', () => baixarLista(list, { button, status, row }));
 
   const progress = document.createElement('div');
   progress.className = 'row__progress';
@@ -105,16 +108,20 @@ function saveBlob(blob, fileName) {
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-async function download(list, ui) {
-  const { button, status, row } = ui;
-  const bar = row.querySelector('.row__progress');
+/**
+ * Baixa um .xlsx acompanhando o progresso do servidor.
+ * Serve tanto para uma lista quanto para a pasta inteira — o que muda é a URL,
+ * o total esperado e onde o texto de progresso aparece.
+ */
+async function baixar({ url, button, status, bar, totalEsperado, nomeFallback }) {
   const token =
     crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const rotuloOriginal = button.textContent;
 
   showError('');
   button.disabled = true;
   button.textContent = 'Gerando…';
-  status.className = 'row__status';
+  status.className = status.className.replace(' row__status--error', '');
   status.textContent = 'iniciando…';
   bar.style.width = '2%';
 
@@ -124,17 +131,23 @@ async function download(list, ui) {
       if (!res.ok) return;
       const progress = await res.json();
 
-      if (progress.building) {
-        status.textContent = `montando planilha (${nf.format(progress.fetched || 0)} tarefas)`;
-        bar.style.width = '97%';
-        return;
+      const total = progress.total || totalEsperado;
+      const partes = [];
+
+      if (progress.listas > 1 && progress.listaAtual) {
+        partes.push(`${progress.listaAtual} (${progress.indice}/${progress.listas})`);
       }
       if (progress.fetched) {
-        const total = progress.total || list.taskCount;
-        status.textContent = total
-          ? `${nf.format(progress.fetched)} de ~${nf.format(total)} tarefas`
-          : `${nf.format(progress.fetched)} tarefas`;
-        if (total) bar.style.width = `${Math.min(95, (progress.fetched / total) * 95)}%`;
+        partes.push(
+          total
+            ? `${nf.format(progress.fetched)} de ~${nf.format(total)} tarefas`
+            : `${nf.format(progress.fetched)} tarefas`,
+        );
+      }
+
+      if (partes.length) status.textContent = partes.join(' · ');
+      if (total && progress.fetched) {
+        bar.style.width = `${Math.min(95, (progress.fetched / total) * 95)}%`;
       }
     } catch {
       /* o polling é só cosmético; falhas nele não afetam o download */
@@ -142,7 +155,7 @@ async function download(list, ui) {
   }, 900);
 
   try {
-    const res = await fetch(`/api/lists/${encodeURIComponent(list.id)}/export.xlsx?p=${token}`, {
+    const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}p=${token}`, {
       cache: 'no-store',
     });
 
@@ -158,7 +171,7 @@ async function download(list, ui) {
     }
 
     const blob = await res.blob();
-    saveBlob(blob, fileNameFrom(res.headers.get('Content-Disposition'), `${list.name}.xlsx`));
+    saveBlob(blob, fileNameFrom(res.headers.get('Content-Disposition'), nomeFallback));
 
     bar.style.width = '100%';
     status.textContent = 'baixado ✓';
@@ -168,14 +181,37 @@ async function download(list, ui) {
     }, 4000);
   } catch (err) {
     bar.style.width = '0';
-    status.className = 'row__status row__status--error';
+    status.className += ' row__status--error';
     status.textContent = 'erro';
-    showError(`${list.name}: ${err.message}`);
+    showError(`${nomeFallback.replace(/\.xlsx$/, '')}: ${err.message}`);
   } finally {
     clearInterval(poll);
     button.disabled = false;
-    button.textContent = 'Baixar Excel';
+    button.textContent = rotuloOriginal;
   }
+}
+
+function baixarLista(list, { button, status, row }) {
+  return baixar({
+    url: `/api/lists/${encodeURIComponent(list.id)}/export.xlsx`,
+    button,
+    status,
+    bar: row.querySelector('.row__progress'),
+    totalEsperado: list.taskCount,
+    nomeFallback: `${list.name}.xlsx`,
+  });
+}
+
+function baixarTudo() {
+  const total = allLists.reduce((soma, list) => soma + (list.taskCount || 0), 0);
+  return baixar({
+    url: '/api/export-all.xlsx',
+    button: els.baixarTudo,
+    status: els.tudoDetalhe,
+    bar: els.tudoProgresso,
+    totalEsperado: total,
+    nomeFallback: 'clickup.xlsx',
+  });
 }
 
 async function loadLists({ force = false } = {}) {
@@ -195,6 +231,7 @@ async function loadLists({ force = false } = {}) {
     }
     const total = allLists.reduce((sum, list) => sum + (list.taskCount || 0), 0);
     els.subtitle.textContent = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
+    els.tudoDetalhe.textContent = `${nf.format(allLists.length)} abas, ${nf.format(total)} tarefas — um arquivo só`;
     render();
   } catch (err) {
     els.lists.innerHTML = '';
@@ -205,5 +242,6 @@ async function loadLists({ force = false } = {}) {
 
 els.search.addEventListener('input', render);
 els.refresh.addEventListener('click', () => loadLists({ force: true }));
+els.baixarTudo.addEventListener('click', baixarTudo);
 
 loadLists();

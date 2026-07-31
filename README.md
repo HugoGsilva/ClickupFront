@@ -178,14 +178,32 @@ e, passando de `AUTH_MAX_FAILURES`, o IP recebe `429` com `Retry-After` por
 frente. Ligado sem proxy, qualquer cliente forja o `X-Forwarded-For` e escapa do
 freio.
 
-## Listas grandes
+## Volume
 
-A API do ClickUp devolve 100 tarefas por requisição e limita 100 requisições por
-minuto. Uma lista de 17 mil tarefas são ~170 requisições, uns 2 minutos. O app:
+O botão **Baixar tudo** exporta a pasta inteira num arquivo só, uma aba por
+lista. Medido com a pasta do print (21 listas, 89.011 tarefas):
 
-- mostra o progresso na linha (`1.200 de ~17.083 tarefas`);
+| | |
+| --- | --- |
+| Pico de memória | **262 MB** |
+| CPU para montar | 10,5 s |
+| Arquivo final | 11,2 MB |
+
+O que segura a memória é a escrita em streaming (`writeWorkbook`, em
+`src/excel.js`): cada página que chega da API vira linha no arquivo e é
+descartada. Acumulando tudo antes de escrever, as mesmas 89 mil tarefas passariam
+de 1,9 GB — sozinha, uma lista de 17 mil já custava 364 MB.
+
+O tempo, esse não tem jeito: a API devolve **100 tarefas por requisição** e o
+token é limitado a **100 requisições por minuto**. 89 mil tarefas são ~890
+requisições, ou seja, uns **9 minutos** para a pasta inteira. Uma lista sozinha
+de 17 mil leva ~2 minutos; a de 829, uns 10 segundos. Enquanto roda, o app:
+
+- mostra o progresso (`JAQUELINE (4/21) · 12.400 de ~89.011 tarefas`);
 - espera e repete sozinho quando toma rate limit (429), em vez de falhar;
-- guarda o arquivo gerado por 5 minutos — baixar a mesma lista de novo é instantâneo.
+- guarda o arquivo por 5 minutos — baixar de novo é instantâneo;
+- se dois cliques pedirem a mesma coisa, os dois esperam a mesma geração em vez
+  de dobrar o trabalho na API.
 
 ## Achar os ids
 

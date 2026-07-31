@@ -228,15 +228,17 @@ function sanitizeSheetName(name) {
 }
 
 /**
- * Monta a planilha: colunas padrão + uma coluna por campo customizado + descrição
- * e link no fim. Devolve o Buffer do arquivo .xlsx.
+ * Colunas da aba: padrão + uma por campo customizado + descrição e link no fim.
+ *
+ * `amostra` é a primeira página de tarefas. Na escrita em streaming as colunas
+ * precisam estar definidas antes da primeira linha, então os campos herdados
+ * (que aparecem na tarefa mas não na definição da lista) são descobertos por
+ * essa amostra — na prática o conjunto de campos é o mesmo na lista inteira.
  */
-export async function buildWorkbook({ list, tasks, fieldDefinitions = [] }) {
-  const customFields = collectCustomFields(fieldDefinitions, tasks);
-  const customFieldById = new Map();
+function buildColumns(fieldDefinitions = [], amostra = []) {
+  const customFields = collectCustomFields(fieldDefinitions, amostra);
 
   const customColumns = customFields.map((definition) => {
-    customFieldById.set(definition.id, definition);
     return {
       header: definition.name || definition.id,
       width: 22,
@@ -255,44 +257,89 @@ export async function buildWorkbook({ list, tasks, fieldDefinitions = [] }) {
     };
   });
 
-  const columns = [...standardColumns(tasks), ...customColumns, ...trailingColumns()];
+  return [...standardColumns(amostra), ...customColumns, ...trailingColumns()];
+}
 
-  const workbook = new ExcelJS.Workbook();
+/**
+ * Escreve o .xlsx direto no disco, uma linha por vez, sem nunca segurar todas as
+ * tarefas na memória.
+ *
+ * É o que torna viável exportar a pasta inteira: acumulando, as ~87 mil tarefas
+ * da pasta passariam de 1,9 GB de pico. Cada aba recebe as páginas conforme elas
+ * chegam da API e as descarrega no arquivo.
+ *
+ * `sheets` é uma lista de { list, fieldDefinitions, pages }, em que `pages` é um
+ * async iterable de arrays de tarefas.
+ */
+export async function writeWorkbook({ filePath, sheets, onProgress }) {
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+    filename: filePath,
+    useStyles: true,
+    useSharedStrings: false,
+  });
   workbook.creator = 'ClickUp Export';
   workbook.created = new Date();
 
-  const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name), {
-    views: [{ state: 'frozen', ySplit: 1 }],
-  });
+  const resumo = [];
 
-  sheet.columns = columns.map((column, index) => ({
-    header: column.header,
-    key: `c${index}`,
-    width: column.width,
-    style: column.format ? { numFmt: column.format } : undefined,
-  }));
+  for (const { list, fieldDefinitions = [], pages } of sheets) {
+    const iterator = pages[Symbol.asyncIterator]();
 
-  for (const task of tasks) {
-    sheet.addRow(columns.map((column) => column.get(task) ?? null));
+    // A primeira página define as colunas, então precisa vir antes da aba.
+    const primeira = await iterator.next();
+    const primeiraPagina = primeira.done ? [] : primeira.value;
+
+    const columns = buildColumns(fieldDefinitions, primeiraPagina);
+    const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name), {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+
+    sheet.columns = columns.map((column, index) => ({
+      header: column.header,
+      key: `c${index}`,
+      width: column.width,
+      style: column.format ? { numFmt: column.format } : undefined,
+    }));
+
+    const header = sheet.getRow(1);
+    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B3A55' } };
+    header.alignment = { vertical: 'middle', horizontal: 'left' };
+    header.height = 22;
+    header.commit();
+
+    sheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: 1, column: columns.length },
+    };
+
+    let total = 0;
+    const escrever = (pagina) => {
+      for (const task of pagina) {
+        sheet.addRow(columns.map((column) => column.get(task) ?? null)).commit();
+        total++;
+      }
+      onProgress?.({ list, total });
+    };
+
+    escrever(primeiraPagina);
+    if (!primeira.done) {
+      for (let atual = await iterator.next(); !atual.done; atual = await iterator.next()) {
+        escrever(atual.value);
+      }
+    }
+
+    sheet.commit();
+    resumo.push({ list: list?.name, tasks: total, columns: columns.length });
   }
 
-  const header = sheet.getRow(1);
-  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B3A55' } };
-  header.alignment = { vertical: 'middle', horizontal: 'left' };
-  header.height = 22;
-
-  sheet.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: 1, column: columns.length },
-  };
-
-  return workbook.xlsx.writeBuffer();
+  await workbook.commit();
+  return resumo;
 }
 
 /** Nome de arquivo seguro, no padrão NOME-DA-LISTA_2026-07-30.xlsx */
-export function buildFileName(listName) {
-  const slug = String(listName || 'tarefas')
+export function buildFileName(nome) {
+  const slug = String(nome || 'tarefas')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-zA-Z0-9]+/g, '-')

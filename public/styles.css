@@ -79,6 +79,42 @@ h1 {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.tudo {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.tudo__texto {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tudo__texto span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* Especificidade dupla: a regra .download aparece depois no arquivo. */
+.download.download--forte {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.download.download--forte:hover:not(:disabled) {
+  background: #22304a;
+}
+
 .search {
   display: flex;
   align-items: center;

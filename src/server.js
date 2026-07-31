@@ -1,12 +1,15 @@
 import express from 'express';
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 import { config, configProblems } from './config.js';
 import { basicAuth } from './auth.js';
-import { ClickUpError, getFolder, getList, getListFields, fetchAllTasks } from './clickup.js';
-import { buildWorkbook, buildFileName } from './excel.js';
+import { ClickUpError, getFolder, getList, getListFields, iterateTaskPages } from './clickup.js';
+import { writeWorkbook, buildFileName } from './excel.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -38,11 +41,18 @@ app.use((req, res, next) => {
 // Caches em memória
 // ---------------------------------------------------------------------------
 let folderCache = null; // { at, data }
-const exportCache = new Map(); // listId -> { at, buffer, fileName, taskCount }
+const exportCache = new Map(); // chave -> { at, filePath, fileName, taskCount }
 const progressByToken = new Map(); // token -> { fetched, total, done, error, at }
+const emAndamento = new Map(); // chave -> Promise, para dois cliques não gerarem duas vezes
 
 const MAX_EXPORT_CACHE = 5;
 const PROGRESS_TTL_MS = 15 * 60 * 1000;
+
+// Os arquivos são montados em disco, não em memória. Uma pasta com 87 mil
+// tarefas passaria de 1,9 GB de pico se fosse acumulada antes de escrever.
+const TEMP_DIR = path.join(os.tmpdir(), 'clickup-export');
+fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 /**
  * O catálogo do que o app mostra: a pasta inteira, ou só as listas configuradas
@@ -65,11 +75,12 @@ async function loadCatalog({ force = false } = {}) {
   return catalog;
 }
 
-function rememberExport(listId, entry) {
-  exportCache.set(listId, entry);
+function rememberExport(chave, entry) {
+  exportCache.set(chave, entry);
   while (exportCache.size > MAX_EXPORT_CACHE) {
-    const oldest = [...exportCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-    exportCache.delete(oldest[0]);
+    const [maisAntiga, valor] = [...exportCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    exportCache.delete(maisAntiga);
+    fsp.unlink(valor.filePath).catch(() => {});
   }
 }
 
@@ -114,56 +125,146 @@ app.get('/api/progress/:token', (req, res) => {
   res.json(progress || { fetched: 0, total: null, done: false });
 });
 
+/**
+ * Gera (ou reaproveita) o .xlsx de um conjunto de listas.
+ *
+ * As listas chegam já validadas contra o catálogo. Dois cliques na mesma coisa
+ * compartilham a mesma geração em vez de dobrar o trabalho na API.
+ */
+async function gerarExport({ chave, nomeArquivo, lists, token }) {
+  const cached = exportCache.get(chave);
+  if (cached && Date.now() - cached.at < config.exportCacheSeconds * 1000) {
+    setProgress(token, {
+      fetched: cached.taskCount,
+      total: cached.taskCount,
+      done: true,
+      cached: true,
+    });
+    return cached;
+  }
+
+  if (emAndamento.has(chave)) return emAndamento.get(chave);
+
+  const trabalho = (async () => {
+    const filePath = path.join(TEMP_DIR, `${randomUUID()}.xlsx`);
+    const totalPrevisto = lists.reduce((soma, list) => soma + (list.taskCount || 0), 0);
+    let jaEscritas = 0;
+
+    setProgress(token, {
+      fetched: 0,
+      total: totalPrevisto || null,
+      listas: lists.length,
+      listaAtual: lists[0]?.name || null,
+      indice: 1,
+      done: false,
+      error: null,
+    });
+
+    const sheets = [];
+    for (const [indice, list] of lists.entries()) {
+      sheets.push({
+        list,
+        fieldDefinitions: await getListFields(list.id).catch(() => []),
+        pages: (async function* () {
+          setProgress(token, { listaAtual: list.name, indice: indice + 1 });
+          for await (const pagina of iterateTaskPages(list.id)) {
+            yield pagina;
+          }
+        })(),
+      });
+    }
+
+    const resumo = await writeWorkbook({
+      filePath,
+      sheets,
+      onProgress: ({ total }) => {
+        // `total` é o acumulado da aba atual; somamos com o que já foi fechado.
+        setProgress(token, { fetched: jaEscritas + total });
+      },
+    });
+
+    // Recontagem final, agora que todas as abas fecharam.
+    jaEscritas = resumo.reduce((soma, aba) => soma + aba.tasks, 0);
+
+    const { size } = await fsp.stat(filePath);
+    const entry = { at: Date.now(), filePath, fileName: nomeArquivo, taskCount: jaEscritas, size };
+    rememberExport(chave, entry);
+
+    setProgress(token, { done: true, fetched: jaEscritas, total: jaEscritas, taskCount: jaEscritas });
+    console.log(
+      `[export] ${nomeArquivo}: ${resumo.length} aba(s), ${jaEscritas} tarefas, ${(size / 1048576).toFixed(1)} MB`,
+    );
+
+    return entry;
+  })();
+
+  emAndamento.set(chave, trabalho);
+  try {
+    return await trabalho;
+  } finally {
+    emAndamento.delete(chave);
+  }
+}
+
+// Uma lista só.
 app.get('/api/lists/:listId/export.xlsx', async (req, res, next) => {
   const { listId } = req.params;
   const token = typeof req.query.p === 'string' ? req.query.p.slice(0, 64) : null;
 
   try {
-    // Só exporta listas da pasta configurada — o id vem do cliente e não pode
+    // Só exporta listas do escopo configurado — o id vem do cliente e não pode
     // virar uma porta para o resto da conta do ClickUp.
-    const folder = await loadCatalog();
-    const list = folder.lists.find((candidate) => candidate.id === listId);
+    const catalog = await loadCatalog();
+    const list = catalog.lists.find((candidate) => candidate.id === listId);
     if (!list) {
       return res.status(404).json({ error: 'Lista não encontrada no escopo configurado.' });
     }
 
-    setProgress(token, { fetched: 0, total: list.taskCount, done: false, error: null });
-
-    const cached = exportCache.get(listId);
-    if (cached && Date.now() - cached.at < config.exportCacheSeconds * 1000) {
-      setProgress(token, { fetched: cached.taskCount, total: cached.taskCount, done: true, cached: true });
-      return sendWorkbook(res, cached.buffer, cached.fileName);
-    }
-
-    const [fieldDefinitions, tasks] = await Promise.all([
-      getListFields(listId).catch(() => []),
-      fetchAllTasks(listId, { onProgress: (fetched) => setProgress(token, { fetched }) }),
-    ]);
-
-    setProgress(token, { fetched: tasks.length, total: tasks.length, building: true });
-
-    const buffer = await buildWorkbook({ list, tasks, fieldDefinitions });
-    const fileName = buildFileName(list.name);
-
-    rememberExport(listId, { at: Date.now(), buffer, fileName, taskCount: tasks.length });
-    setProgress(token, { done: true, building: false, taskCount: tasks.length });
-
-    console.log(`[export] ${list.name}: ${tasks.length} tarefas, ${fieldDefinitions.length} campos customizados`);
-    return sendWorkbook(res, buffer, fileName);
+    const entry = await gerarExport({
+      chave: `lista:${listId}`,
+      nomeArquivo: buildFileName(list.name),
+      lists: [list],
+      token,
+    });
+    return sendWorkbook(res, entry);
   } catch (err) {
     setProgress(token, { done: true, error: err.message });
     return next(err);
   }
 });
 
-function sendWorkbook(res, buffer, fileName) {
+// A pasta inteira: uma aba por lista, num arquivo só.
+app.get('/api/export-all.xlsx', async (req, res, next) => {
+  const token = typeof req.query.p === 'string' ? req.query.p.slice(0, 64) : null;
+
+  try {
+    const catalog = await loadCatalog();
+    const lists = catalog.lists.slice().sort((a, b) => a.orderindex - b.orderindex);
+    if (!lists.length) {
+      return res.status(404).json({ error: 'Nenhuma lista no escopo configurado.' });
+    }
+
+    const entry = await gerarExport({
+      chave: 'tudo',
+      nomeArquivo: buildFileName(catalog.name || 'tudo'),
+      lists,
+      token,
+    });
+    return sendWorkbook(res, entry);
+  } catch (err) {
+    setProgress(token, { done: true, error: err.message });
+    return next(err);
+  }
+});
+
+function sendWorkbook(res, { filePath, fileName, size }) {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader(
     'Content-Disposition',
     `attachment; filename="${fileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
   );
-  res.setHeader('Content-Length', Buffer.byteLength(buffer));
-  return res.end(Buffer.from(buffer));
+  if (size) res.setHeader('Content-Length', String(size));
+  return fs.createReadStream(filePath).pipe(res);
 }
 
 app.use(express.static(publicDir, { index: 'index.html', extensions: ['html'] }));

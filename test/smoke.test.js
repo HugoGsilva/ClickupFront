@@ -273,6 +273,34 @@ try {
     assert.equal(big.worksheets[0].rowCount, 251); // cabeçalho + 250 tarefas
   });
 
+  await test('exporta a pasta inteira com uma aba por lista', async () => {
+    const res = await fetch(`${appUrl}/api/export-all.xlsx`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-disposition'), /\.xlsx/);
+
+    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+    const file = path.join(dir, 'tudo.xlsx');
+    await writeFile(file, Buffer.from(await res.arrayBuffer()));
+
+    const tudo = new ExcelJS.Workbook();
+    await tudo.xlsx.readFile(file);
+
+    assert.deepEqual(
+      tudo.worksheets.map((sheet) => sheet.name),
+      ['DIVANEIDE', 'ANA CAROLINA'],
+    );
+    assert.equal(tudo.worksheets[0].rowCount, 4); // cabeçalho + 3
+    assert.equal(tudo.worksheets[1].rowCount, 251); // cabeçalho + 250
+
+    // Os campos customizados também vêm nas abas do arquivo completo.
+    const headers = tudo.worksheets[1].getRow(1).values.slice(1);
+    for (const esperado of ['CPF', 'Valor do Precatório', 'Fase', 'Etiquetas']) {
+      assert.ok(headers.includes(esperado), `faltou "${esperado}" na aba da pasta inteira`);
+    }
+  });
+
   await test('o progresso é reportado durante a exportação', async () => {
     const token = 'token-de-teste';
     const download = fetch(`${appUrl}/api/lists/902/export.xlsx?p=${token}&nocache=1`, {

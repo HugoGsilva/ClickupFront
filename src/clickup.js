@@ -288,13 +288,13 @@ export async function getListFields(listId) {
  * Busca todas as tarefas da lista, paginando de 100 em 100 até a última página.
  * `onProgress` recebe o total acumulado a cada página.
  */
-export async function fetchAllTasks(listId, { onProgress, signal, maxPages = MAX_PAGES } = {}) {
-  const tasks = [];
+export async function* iterateTaskPages(listId, { signal, maxPages = MAX_PAGES } = {}) {
+  assertId(listId, 'id da lista');
 
   for (let page = 0; page < Math.min(maxPages, MAX_PAGES); page++) {
     if (signal?.aborted) throw new ClickUpError('Exportação cancelada.', 499);
 
-    const data = await request(`/list/${assertId(listId, 'id da lista')}/task`, {
+    const data = await request(`/list/${listId}/task`, {
       page,
       archived: config.includeArchived ? 'true' : 'false',
       include_closed: config.includeClosed ? 'true' : 'false',
@@ -302,11 +302,22 @@ export async function fetchAllTasks(listId, { onProgress, signal, maxPages = MAX
     });
 
     const batch = data.tasks || [];
-    tasks.push(...batch);
-    onProgress?.(tasks.length);
+    yield batch;
 
     if (data.last_page || batch.length === 0) break;
   }
+}
 
+/**
+ * Junta todas as páginas numa lista só. Use com parcimônia: uma lista de 17 mil
+ * tarefas ocupa ~140 MB só de JSON. A exportação usa iterateTaskPages, que
+ * escreve conforme lê; isto aqui serve para amostras e scripts.
+ */
+export async function fetchAllTasks(listId, { onProgress, signal, maxPages = MAX_PAGES } = {}) {
+  const tasks = [];
+  for await (const batch of iterateTaskPages(listId, { signal, maxPages })) {
+    tasks.push(...batch);
+    onProgress?.(tasks.length);
+  }
   return tasks;
 }
