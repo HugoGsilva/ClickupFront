@@ -265,6 +265,116 @@ try {
     assert.ok(headers.indexOf('CPF') > ultimoPadrao, 'campo extra deveria vir depois das padrão');
   });
 
+  await test('configuração de coluna inválida é recusada na subida', async () => {
+    const { validarColunas } = await import('../src/excel.js');
+    const listas = await import('../src/listas.js');
+    const original = [...listas.COLUNAS];
+
+    const casos = [
+      [{ padrao: 'nao_existe', titulo: 'X' }, /não existe/],
+      [{ padrão: 'status', titulo: 'Status' }, /exatamente um/], // acento na propriedade
+      [{}, /exatamente um/],
+      [{ padrao: 'status', campo: 'CPF' }, /exatamente um/],
+      [{ campo: '   ' }, /nome do campo/],
+    ];
+
+    try {
+      for (const [entrada, esperado] of casos) {
+        listas.COLUNAS.length = 0;
+        listas.COLUNAS.push(...original, entrada);
+        const problemas = validarColunas();
+        assert.equal(problemas.length, 1, `${JSON.stringify(entrada)} deveria dar 1 problema`);
+        assert.match(problemas[0], esperado);
+      }
+
+      listas.COLUNAS.length = 0;
+      listas.COLUNAS.push(...original);
+      assert.deepEqual(validarColunas(), [], 'a configuração real tem que estar válida');
+    } finally {
+      listas.COLUNAS.length = 0;
+      listas.COLUNAS.push(...original);
+    }
+  });
+
+  await test('campos homônimos ficam juntos, na posição configurada', async () => {
+    const { writeWorkbook } = await import('../src/excel.js');
+    const listas = await import('../src/listas.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+    const file = path.join(dir, 'homonimos.xlsx');
+    const original = [...listas.COLUNAS];
+
+    // Campo recriado no ClickUp mantém o nome e ganha id novo. Guardar só o
+    // último exilava o outro para o fim da aba, com cabeçalho idêntico.
+    listas.COLUNAS.length = 0;
+    listas.COLUNAS.push({ padrao: 'nome', titulo: 'Nome da tarefa' }, { campo: 'CPF' }, { padrao: 'status', titulo: 'Status' });
+
+    try {
+      await writeWorkbook({
+        filePath: file,
+        sheets: [
+          {
+            list: { name: 'TESTE' },
+            fieldDefinitions: [
+              { id: 'velho', name: 'CPF', type: 'short_text', type_config: {} },
+              { id: 'novo', name: 'CPF', type: 'short_text', type_config: {} },
+            ],
+            pages: (async function* () {
+              yield [{ id: 't1', name: 'x', status: { status: 'ok' }, custom_fields: [] }];
+            })(),
+          },
+        ],
+      });
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(file);
+      const headers = wb.worksheets[0].getRow(1).values.slice(1);
+      assert.deepEqual(headers, ['Nome da tarefa', 'CPF', 'CPF', 'Status']);
+    } finally {
+      listas.COLUNAS.length = 0;
+      listas.COLUNAS.push(...original);
+    }
+  });
+
+  await test('campo oculto que aparece tarde não aborta a exportação', async () => {
+    const { writeWorkbook } = await import('../src/excel.js');
+    const listas = await import('../src/listas.js');
+    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+    const file = path.join(dir, 'oculto-tardio.xlsx');
+
+    listas.CAMPOS_OCULTOS.push('Escondido');
+    try {
+      // O campo escondido não está nas definições nem na primeira página: antes,
+      // a trava de campo tardio matava a exportação alegando que ele não teria
+      // coluna — sendo que ele foi excluído de propósito.
+      await writeWorkbook({
+        filePath: file,
+        sheets: [
+          {
+            list: { name: 'TESTE' },
+            fieldDefinitions: [{ id: 'a', name: 'CPF', type: 'short_text', type_config: {} }],
+            pages: (async function* () {
+              yield [{ id: 't1', name: 'x', custom_fields: [{ id: 'a', type: 'short_text', value: '1' }] }];
+              yield [
+                {
+                  id: 't2',
+                  name: 'y',
+                  custom_fields: [{ id: 'z', name: 'Escondido', type: 'short_text', value: 'segredo' }],
+                },
+              ];
+            })(),
+          },
+        ],
+      });
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(file);
+      assert.equal(wb.worksheets[0].rowCount, 3, 'as duas tarefas deveriam estar na planilha');
+    } finally {
+      listas.CAMPOS_OCULTOS.length = 0;
+      listas.CAMPOS_OCULTOS.push('Msg Proposta Pronta');
+    }
+  });
+
   await test('campo do tipo button não vira coluna', () => {
     const headers = sheet.getRow(1).values.slice(1);
     assert.ok(!headers.includes('Botão de ação'), 'campo button não deveria virar coluna');

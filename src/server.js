@@ -10,7 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import { config, configProblems } from './config.js';
 import { basicAuth } from './auth.js';
 import { ClickUpError, getFolder, getList, getListFields, iterateTaskPages } from './clickup.js';
-import { writeWorkbook, buildFileName } from './excel.js';
+import { writeWorkbook, buildFileName, validarColunas } from './excel.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -478,7 +478,7 @@ app.use((err, req, res, next) => {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-const problems = configProblems();
+const problems = [...configProblems(), ...validarColunas()];
 if (problems.length) {
   console.error('\nConfiguração incompleta:');
   for (const problem of problems) console.error(`  - ${problem}`);

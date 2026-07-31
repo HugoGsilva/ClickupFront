@@ -215,7 +215,7 @@ function collectCustomFields(fieldDefinitions, tasks) {
  *
  * Sobre as duas datas de fim: o ClickUp tem `date_done` (concluída) e
  * `date_closed` (fechada), e elas não coincidem — nas tarefas reais desta pasta
- * a primeira vem preenchida em 95% e a segunda em 1,5%. Exportar só uma
+ * a primeira vem preenchida em 93% e a segunda em 4%. Exportar só uma
  * deixaria a coluna praticamente vazia.
  */
 const LEITORES_PADRAO = {
@@ -256,6 +256,39 @@ function sanitizeSheetName(name, usados) {
 }
 
 /**
+ * Confere COLUNAS antes de o app começar a atender.
+ *
+ * Sem isto, um erro na configuração só aparecia quando alguém clicasse em
+ * baixar — depois de push, CI verde e redeploy, com a tela funcionando. Pior:
+ * errar o NOME da propriedade (`padrão` com acento, num arquivo todo acentuado)
+ * não dava erro nenhum, a coluna simplesmente sumia da planilha em silêncio.
+ */
+export function validarColunas() {
+  const problemas = [];
+
+  COLUNAS.forEach((spec, i) => {
+    const temPadrao = 'padrao' in spec;
+    const temCampo = 'campo' in spec;
+    const posicao = `COLUNAS[${i}] (${JSON.stringify(spec)})`;
+
+    if (temPadrao === temCampo) {
+      problemas.push(`${posicao}: precisa ter exatamente um entre "padrao" e "campo".`);
+      return;
+    }
+    if (temPadrao && !LEITORES_PADRAO[spec.padrao]) {
+      problemas.push(
+        `${posicao}: "${spec.padrao}" não existe. Válidas: ${Object.keys(LEITORES_PADRAO).join(', ')}.`,
+      );
+    }
+    if (temCampo && (typeof spec.campo !== 'string' || !spec.campo.trim())) {
+      problemas.push(`${posicao}: "campo" tem que ser o nome do campo no ClickUp.`);
+    }
+  });
+
+  return problemas;
+}
+
+/**
  * Colunas da aba, na ordem e com os títulos de COLUNAS (src/listas.js).
  *
  * `amostra` é a primeira página de tarefas. Na escrita em streaming as colunas
@@ -284,7 +317,18 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
     },
   });
 
-  const porNome = new Map(customFields.map((definition) => [definition.name, definition]));
+  // Um nome pode ter mais de uma definição (campo recriado no ClickUp mantém o
+  // nome com id novo). Guardar só a última mandava a outra para o fim da aba,
+  // com cabeçalho idêntico e origem diferente — numa planilha de CPF e valores,
+  // duas colunas com o mesmo título e conteúdos distintos. Todas ficam juntas,
+  // na posição configurada.
+  const porNome = new Map();
+  for (const definition of customFields) {
+    const chave = String(definition.name || '').trim();
+    if (!porNome.has(chave)) porNome.set(chave, []);
+    porNome.get(chave).push(definition);
+  }
+
   const usados = new Set();
   const colunas = [];
 
@@ -302,8 +346,7 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
     }
 
     // Campo configurado que não existe nesta lista simplesmente não vira coluna.
-    const definition = porNome.get(spec.campo);
-    if (definition) {
+    for (const definition of porNome.get(String(spec.campo).trim()) || []) {
       colunas.push(colunaDeCampo(definition));
       usados.add(definition.id);
     }
@@ -313,6 +356,15 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
   // sumir: um campo novo no ClickUp aparece sem ninguém mexer no código.
   for (const definition of customFields) {
     if (!usados.has(definition.id)) colunas.push(colunaDeCampo(definition));
+  }
+
+  const repetidos = colunas
+    .map((coluna) => coluna.header)
+    .filter((header, i, todos) => todos.indexOf(header) !== i);
+  if (repetidos.length) {
+    // Não dá para renomear: o título tem que ser igual ao do ClickUp. Mas quem
+    // for usar PROCV ou tabela dinâmica precisa saber que existe ambiguidade.
+    console.warn(`[colunas] títulos repetidos na planilha: ${[...new Set(repetidos)].join(', ')}`);
   }
 
   return { colunas, vistos };
@@ -382,6 +434,10 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
         // a partir da tarefa 101 não teria coluna e sumiria da planilha sem
         // aviso — com dado de precatório, isso é inaceitável em silêncio.
         for (const campo of task.custom_fields || []) {
+          // Excluído de propósito não é "desconhecido": sem esta checagem, um
+          // campo oculto ou de botão que só aparecesse na segunda página
+          // abortava a exportação alegando que ele não teria coluna.
+          if (campo?.type === 'button' || CAMPOS_OCULTOS.includes(campo?.name)) continue;
           if (campo?.id && campo.value != null && campo.value !== '' && !conhecidos.has(campo.id)) {
             throw new Error(
               `Campo customizado "${campo.name || campo.id}" apareceu com valor fora das primeiras 100 tarefas ` +

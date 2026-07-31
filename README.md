@@ -112,8 +112,10 @@ para o Docker conseguir monitorar o container.
 
 ## O que sai na planilha
 
-Uma aba por lista, uma linha por tarefa, **30 colunas** — os mesmos nomes e a
-mesma ordem do seletor de colunas do ClickUp:
+Uma aba por lista, uma linha por tarefa. Nas listas da pasta Precatório são
+**30 colunas** — os mesmos nomes e a mesma ordem do seletor do ClickUp. Uma
+lista com outro conjunto de campos customizados gera menos colunas: as padrão
+são sempre as mesmas, as customizadas dependem do que existe na lista.
 
 ```
 Nome da tarefa · 03 - CPF · 02 - Telefone · 04 - NrProcesso · 01 - Ação
@@ -135,8 +137,13 @@ planilha:
 ```
 
 `padrao` liga a um leitor em `src/excel.js` e não muda; o `titulo` é livre, e é
-onde se corrige um nome que esteja diferente do ClickUp. Chave inexistente falha
-na subida, listando as válidas.
+onde se corrige um nome que esteja diferente do ClickUp.
+
+A configuração é conferida **na subida do app**: chave inexistente, entrada sem
+`padrao` nem `campo` (inclusive erro de digitação na propriedade, como `padrão`
+com acento) ou `campo` vazio impedem o container de subir, com a mensagem
+dizendo qual entrada e quais são as válidas. Antes isso passava batido e a
+coluna simplesmente sumia da planilha, sem erro.
 
 > O ClickUp tem **duas** datas de fim e elas não coincidem: `Data de conclusão`
 > (`date_done`) e `Data de encerramento` (`date_closed`). Nas tarefas reais
