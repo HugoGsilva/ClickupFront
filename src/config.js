@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { PASTA_PADRAO, IDS_PADRAO } from './listas.js';
 
 function bool(name, fallback = false) {
   const raw = (process.env[name] || '').trim().toLowerCase();
@@ -16,9 +17,18 @@ function ids(name) {
 export const config = {
   clickupToken: (process.env.CLICKUP_TOKEN || '').trim(),
 
-  // Escolha um dos dois: a pasta inteira, ou listas específicas.
-  folderId: (process.env.CLICKUP_FOLDER_ID || '').trim(),
+  // Por padrão, a pasta e as listas fixas de src/listas.js. As variáveis abaixo
+  // existem para sobrescrever isso sem mexer no código.
+  folderId: (process.env.CLICKUP_FOLDER_ID || PASTA_PADRAO).trim(),
   listIds: ids('CLICKUP_LIST_IDS'),
+  // Ids permitidos dentro da pasta. Vazio = todas as listas da pasta.
+  // O recorte fixo só vale para a pasta a que ele pertence: apontar para outra
+  // pasta mostra todas as listas dela, senão o filtro esvaziaria a tela.
+  idsPermitidos:
+    !bool('CLICKUP_ALL_LISTS', false) &&
+    (process.env.CLICKUP_FOLDER_ID || PASTA_PADRAO).trim() === PASTA_PADRAO
+      ? IDS_PADRAO
+      : [],
   teamId: (process.env.CLICKUP_TEAM_ID || '').trim(),
 
   includeArchived: bool('CLICKUP_INCLUDE_ARCHIVED', false),
@@ -53,10 +63,7 @@ export function configProblems() {
     problems.push('CLICKUP_TOKEN não definido — pegue o token em ClickUp > Settings > Apps > API Token.');
   }
   if (!config.folderId && !config.listIds.length) {
-    problems.push(
-      'Defina CLICKUP_FOLDER_ID (a pasta inteira) ou CLICKUP_LIST_IDS (listas específicas, separadas por vírgula). ' +
-        'Rode "npm run descobrir" para achar os ids.',
-    );
+    problems.push('Sem escopo: defina CLICKUP_FOLDER_ID ou CLICKUP_LIST_IDS, ou preencha src/listas.js.');
   }
   if (!config.authUser || !config.authPassword) {
     problems.push('AUTH_USER e/ou AUTH_PASSWORD não definidos — sem eles o app ficaria aberto na internet.');

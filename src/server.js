@@ -65,10 +65,31 @@ async function loadCatalog({ force = false } = {}) {
 
   let catalog;
   if (config.listIds.length) {
+    // Listas avulsas vindas do ambiente: uma chamada por lista.
     const lists = await Promise.all(config.listIds.map((id) => getList(id)));
     catalog = { id: null, name: config.appTitle, lists };
   } else {
+    // Uma chamada só traz a pasta com todas as listas e suas contagens; o
+    // recorte de quais aparecem é feito aqui, sem gastar mais requisição.
     catalog = await getFolder(config.folderId);
+
+    if (config.idsPermitidos.length) {
+      const porId = new Map(catalog.lists.map((list) => [list.id, list]));
+      const escolhidas = config.idsPermitidos.map((id) => porId.get(id)).filter(Boolean);
+
+      const sumidas = config.idsPermitidos.filter((id) => !porId.has(id));
+      if (sumidas.length) {
+        console.warn(
+          `[catálogo] ${sumidas.length} lista(s) de src/listas.js não estão na pasta ${config.folderId}: ${sumidas.join(', ')}`,
+        );
+      }
+
+      // A ordem de src/listas.js manda, então a tela não depende do orderindex.
+      catalog = {
+        ...catalog,
+        lists: escolhidas.map((list, indice) => ({ ...list, orderindex: indice })),
+      };
+    }
   }
 
   folderCache = { at: Date.now(), data: catalog };

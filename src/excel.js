@@ -130,6 +130,12 @@ export function formatCustomFieldValue(field) {
     case 'location':
       return value.formatted_address || value.place_name || null;
 
+    // Botão de ação da interface do ClickUp: não carrega dado. A coluna existe
+    // para o export refletir todos os campos da lista, mas fica vazia em vez de
+    // despejar JSON.
+    case 'button':
+      return null;
+
     case 'manual_progress':
     case 'automatic_progress': {
       const percent = Number(value.percent_complete ?? value.current);

@@ -204,6 +204,33 @@ de 17 mil leva ~2 minutos; a de 829, uns 10 segundos. Enquanto roda, o app:
 - se dois cliques pedirem a mesma coisa, os dois esperam a mesma geração em vez
   de dobrar o trabalho na API.
 
+## Escopo: as listas que aparecem
+
+O padrão vem fixo em **`src/listas.js`** — a pasta Negócios Precatório e os 19
+nomes que devem aparecer na tela, nessa ordem. Está no código, e não em variável
+de ambiente, porque são muitos e mudam pouco: assim o Portainer não precisa de
+uma variável gigante.
+
+**Para incluir ou remover um nome**: edite `src/listas.js`, faça push, e depois
+*Pull and redeploy* no Portainer. O CI publica a imagem nova sozinho.
+
+Custa **uma** requisição: o app busca a pasta inteira (que já vem com as
+contagens) e faz o recorte em memória. Se um id do arquivo não estiver mais na
+pasta, o app avisa no log em vez de quebrar.
+
+Dá para sobrescrever sem tocar no código:
+
+| Variável | Efeito |
+| --- | --- |
+| `CLICKUP_ALL_LISTS=true` | mostra todas as listas da pasta, ignorando o recorte |
+| `CLICKUP_FOLDER_ID=<outra>` | aponta para outra pasta (o recorte fixo não se aplica a ela) |
+| `CLICKUP_LIST_IDS=<a,b,c>` | listas avulsas, de qualquer pasta |
+
+> A contagem que aparece ao lado de cada nome é o `task_count` do ClickUp, que
+> **não inclui subtarefas**. Como a exportação inclui, a planilha costuma ter
+> algumas linhas a mais — em DIVINO, 135 na tela e 137 na planilha. Verificado:
+> com `CLICKUP_INCLUDE_SUBTASKS=false` os dois números batem.
+
 ## Achar os ids
 
 ```bash
