@@ -108,6 +108,12 @@ export function startFakeClickUp() {
       return send({ lists: LISTS });
     }
 
+    const listMatch = /^\/list\/([^/]+)$/.exec(url.pathname);
+    if (listMatch) {
+      const list = LISTS.find((candidate) => candidate.id === listMatch[1]);
+      return list ? send(list) : send({ err: 'List not found' }, 404);
+    }
+
     const fieldMatch = /^\/list\/([^/]+)\/field$/.exec(url.pathname);
     if (fieldMatch) {
       return send({ fields: FIELDS });

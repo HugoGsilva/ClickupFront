@@ -1,0 +1,69 @@
+# Stack para Docker Swarm + Traefik (Portainer > Stacks > Add stack).
+# Para Docker simples, sem Swarm, use o docker-compose.yml.
+#
+# Variáveis a preencher na aba "Environment variables" do Portainer:
+#   CLICKUP_TOKEN, AUTH_USER, AUTH_PASSWORD
+#   e CLICKUP_LIST_IDS *ou* CLICKUP_FOLDER_ID
+version: "3.8"
+
+services:
+  clickup-export:
+    image: ${DOCKER_IMAGE:-hugogsilva/clickup-export:latest}
+    environment:
+      CLICKUP_TOKEN: "${CLICKUP_TOKEN:?CLICKUP_TOKEN is required}"
+
+      # Escolha UM dos dois. Rode "npm run descobrir" para achar os ids —
+      # o id que aparece na URL da lista é o da view, não o da lista.
+      CLICKUP_LIST_IDS: "${CLICKUP_LIST_IDS:-}"
+      CLICKUP_FOLDER_ID: "${CLICKUP_FOLDER_ID:-}"
+
+      CLICKUP_INCLUDE_CLOSED: "${CLICKUP_INCLUDE_CLOSED:-true}"
+      CLICKUP_INCLUDE_SUBTASKS: "${CLICKUP_INCLUDE_SUBTASKS:-true}"
+      CLICKUP_INCLUDE_ARCHIVED: "${CLICKUP_INCLUDE_ARCHIVED:-false}"
+
+      AUTH_USER: "${AUTH_USER:?AUTH_USER is required}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:?AUTH_PASSWORD is required}"
+
+      # Traefik está na frente, então o app pode confiar no X-Forwarded-For
+      # para identificar o cliente no freio de força bruta.
+      TRUST_PROXY: "true"
+
+      APP_TITLE: "${APP_TITLE:-Negócios Precatório}"
+      TZ: "${TZ:-America/Sao_Paulo}"
+      PORT: "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - network_swarm_public
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "1"
+          # Uma lista de 17 mil tarefas chega a ~364 MB de pico durante a
+          # montagem da planilha. 1G dá folga; abaixo disso o container morre
+          # no meio da exportação das listas grandes.
+          memory: 1G
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.clickup-export.rule=Host(`testeclickup.hugogsilva.dev`)
+        - traefik.http.routers.clickup-export.entrypoints=websecure
+        - traefik.http.routers.clickup-export.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.clickup-export.service=clickup-export
+        - traefik.http.services.clickup-export.loadbalancer.server.port=3000
+
+networks:
+  network_swarm_public:
+    external: true

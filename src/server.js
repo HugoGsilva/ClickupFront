@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 
 import { config, configProblems } from './config.js';
 import { basicAuth } from './auth.js';
-import { ClickUpError, getFolder, getListFields, fetchAllTasks } from './clickup.js';
+import { ClickUpError, getFolder, getList, getListFields, fetchAllTasks } from './clickup.js';
 import { buildWorkbook, buildFileName } from './excel.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -44,13 +44,25 @@ const progressByToken = new Map(); // token -> { fetched, total, done, error, at
 const MAX_EXPORT_CACHE = 5;
 const PROGRESS_TTL_MS = 15 * 60 * 1000;
 
-async function loadFolder({ force = false } = {}) {
+/**
+ * O catálogo do que o app mostra: a pasta inteira, ou só as listas configuradas
+ * em CLICKUP_LIST_IDS. É ele que também serve de allowlist na exportação — id
+ * que não estiver aqui não vira requisição.
+ */
+async function loadCatalog({ force = false } = {}) {
   const fresh = folderCache && Date.now() - folderCache.at < config.listsCacheSeconds * 1000;
   if (fresh && !force) return folderCache.data;
 
-  const folder = await getFolder(config.folderId);
-  folderCache = { at: Date.now(), data: folder };
-  return folder;
+  let catalog;
+  if (config.listIds.length) {
+    const lists = await Promise.all(config.listIds.map((id) => getList(id)));
+    catalog = { id: null, name: config.appTitle, lists };
+  } else {
+    catalog = await getFolder(config.folderId);
+  }
+
+  folderCache = { at: Date.now(), data: catalog };
+  return catalog;
 }
 
 function rememberExport(listId, entry) {
@@ -79,7 +91,7 @@ app.get('/api/config', (req, res) => {
 
 app.get('/api/lists', async (req, res, next) => {
   try {
-    const folder = await loadFolder({ force: req.query.refresh === '1' });
+    const folder = await loadCatalog({ force: req.query.refresh === '1' });
     res.json({
       folder: { id: folder.id, name: folder.name },
       lists: folder.lists
@@ -109,10 +121,10 @@ app.get('/api/lists/:listId/export.xlsx', async (req, res, next) => {
   try {
     // Só exporta listas da pasta configurada — o id vem do cliente e não pode
     // virar uma porta para o resto da conta do ClickUp.
-    const folder = await loadFolder();
+    const folder = await loadCatalog();
     const list = folder.lists.find((candidate) => candidate.id === listId);
     if (!list) {
-      return res.status(404).json({ error: 'Lista não encontrada nesta pasta.' });
+      return res.status(404).json({ error: 'Lista não encontrada no escopo configurado.' });
     }
 
     setProgress(token, { fetched: 0, total: list.taskCount, done: false, error: null });
@@ -179,5 +191,8 @@ if (problems.length) {
 
 app.listen(config.port, () => {
   console.log(`ClickUp Export rodando em http://localhost:${config.port}`);
-  console.log(`Pasta: ${config.folderId} | usuário: ${config.authUser}`);
+  const escopo = config.listIds.length
+    ? `listas: ${config.listIds.join(', ')}`
+    : `pasta: ${config.folderId}`;
+  console.log(`Escopo — ${escopo} | usuário: ${config.authUser}`);
 });

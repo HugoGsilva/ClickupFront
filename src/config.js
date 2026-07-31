@@ -6,9 +6,20 @@ function bool(name, fallback = false) {
   return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'sim';
 }
 
+function ids(name) {
+  return (process.env[name] || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 export const config = {
   clickupToken: (process.env.CLICKUP_TOKEN || '').trim(),
+
+  // Escolha um dos dois: a pasta inteira, ou listas específicas.
   folderId: (process.env.CLICKUP_FOLDER_ID || '').trim(),
+  listIds: ids('CLICKUP_LIST_IDS'),
+  teamId: (process.env.CLICKUP_TEAM_ID || '').trim(),
 
   includeArchived: bool('CLICKUP_INCLUDE_ARCHIVED', false),
   includeClosed: bool('CLICKUP_INCLUDE_CLOSED', true),
@@ -41,8 +52,11 @@ export function configProblems() {
   if (!config.clickupToken) {
     problems.push('CLICKUP_TOKEN não definido — pegue o token em ClickUp > Settings > Apps > API Token.');
   }
-  if (!config.folderId) {
-    problems.push('CLICKUP_FOLDER_ID não definido — é o id da pasta "Negócios Precatório".');
+  if (!config.folderId && !config.listIds.length) {
+    problems.push(
+      'Defina CLICKUP_FOLDER_ID (a pasta inteira) ou CLICKUP_LIST_IDS (listas específicas, separadas por vírgula). ' +
+        'Rode "npm run descobrir" para achar os ids.',
+    );
   }
   if (!config.authUser || !config.authPassword) {
     problems.push('AUTH_USER e/ou AUTH_PASSWORD não definidos — sem eles o app ficaria aberto na internet.');

@@ -119,6 +119,44 @@ try {
     assert.equal(res.status, 404);
   });
 
+  await test('modo CLICKUP_LIST_IDS mostra só as listas configuradas', async () => {
+    const outraPorta = 3997;
+    const outro = spawn(process.execPath, ['src/server.js'], {
+      cwd: path.join(import.meta.dirname, '..'),
+      env: {
+        ...process.env,
+        CLICKUP_API_BASE: base,
+        CLICKUP_TOKEN: 'pk_token_de_teste',
+        CLICKUP_FOLDER_ID: '', // sem pasta: só as listas escolhidas
+        CLICKUP_LIST_IDS: '902',
+        AUTH_USER: USER,
+        AUTH_PASSWORD: PASSWORD,
+        PORT: String(outraPorta),
+        APP_TITLE: 'Listas escolhidas',
+      },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    try {
+      await waitForServer(`http://127.0.0.1:${outraPorta}/health`);
+      const res = await fetch(`http://127.0.0.1:${outraPorta}/api/lists`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      const data = await res.json();
+      assert.deepEqual(data.lists.map((list) => list.name), ['ANA CAROLINA']);
+      assert.equal(data.folder.name, 'Listas escolhidas');
+
+      // A lista de fora continua barrada, como no modo pasta.
+      const fora = await fetch(`http://127.0.0.1:${outraPorta}/api/lists/901/export.xlsx`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(fora.status, 404);
+    } finally {
+      outro.kill();
+    }
+  });
+
   console.log('\nExportação');
 
   let workbook;

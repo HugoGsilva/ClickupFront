@@ -195,6 +195,32 @@ export async function getLists(folderId) {
   return (data.lists || []).map(normalizeList);
 }
 
+/** Uma lista específica, quando o app é configurado por CLICKUP_LIST_IDS. */
+export async function getList(listId) {
+  const list = await request(`/list/${assertId(listId, 'id da lista')}`);
+  return normalizeList(list);
+}
+
+/**
+ * Espaços, pastas e listas do time — só para o script de descoberta imprimir os
+ * ids. O app em si nunca chama isto: ele fica restrito ao que foi configurado.
+ */
+export async function getSpaces(teamId) {
+  const data = await request(`/team/${assertId(teamId, 'CLICKUP_TEAM_ID')}/space`, { archived: 'false' });
+  return data.spaces || [];
+}
+
+export async function getFolders(spaceId) {
+  const data = await request(`/space/${assertId(spaceId, 'id do espaço')}/folder`, { archived: 'false' });
+  return data.folders || [];
+}
+
+/** Listas soltas do espaço, que não estão dentro de nenhuma pasta. */
+export async function getFolderlessLists(spaceId) {
+  const data = await request(`/space/${assertId(spaceId, 'id do espaço')}/list`, { archived: 'false' });
+  return (data.lists || []).map(normalizeList);
+}
+
 function normalizeList(list) {
   return {
     id: list.id,

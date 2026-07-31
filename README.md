@@ -25,7 +25,9 @@ Copie `.env.example` para `.env` e preencha:
 | Variável | O que é |
 | --- | --- |
 | `CLICKUP_TOKEN` | Token pessoal da API. ClickUp > Settings > Apps > *API Token*. Começa com `pk_`. |
-| `CLICKUP_FOLDER_ID` | Id da pasta "Negócios Precatório". Abra a pasta no ClickUp e pegue da URL: `.../v/f/<ID-DA-PASTA>/...` |
+| `CLICKUP_FOLDER_ID` | Id da pasta a exibir — mostra todas as listas dela. |
+| `CLICKUP_LIST_IDS` | Alternativa à pasta: ids de listas específicas, separados por vírgula. |
+| `CLICKUP_TEAM_ID` | Só para o `npm run descobrir`. É o primeiro número da URL do ClickUp. |
 | `AUTH_USER` / `AUTH_PASSWORD` | Usuário e senha do login do navegador. |
 | `CLICKUP_INCLUDE_CLOSED` | `true` inclui tarefas concluídas (padrão). |
 | `CLICKUP_INCLUDE_SUBTASKS` | `true` inclui subtarefas (padrão). |
@@ -60,7 +62,32 @@ publicar, em vez de falhar. Pull request nunca publica imagem.
 Tags geradas: `latest` (branch padrão), o nome da branch, o sha curto e a versão
 quando você criar uma tag `v*`.
 
-## Deploy no Portainer
+## Deploy no Portainer (Docker Swarm + Traefik)
+
+Use o **`docker-stack.yml`**: ele já vem com `deploy:`, a rede externa
+`network_swarm_public` e as labels do Traefik para
+`testeclickup.hugogsilva.dev` (entrypoint `websecure`, certificado pelo
+`letsencryptresolver`). Também já liga `TRUST_PROXY=true`, porque com o Traefik
+na frente é ele quem informa o IP real do cliente — sem isso o freio de força
+bruta contaria todo mundo como um IP só.
+
+**Stacks > Add stack > Web editor**, cole o arquivo e preencha em *Environment
+variables*:
+
+| Variável | Valor |
+| --- | --- |
+| `DOCKER_IMAGE` | `seuusuario/clickup-export:latest` |
+| `CLICKUP_TOKEN` | o token `pk_...` |
+| `CLICKUP_LIST_IDS` *ou* `CLICKUP_FOLDER_ID` | o escopo (veja *Achar os ids*) |
+| `AUTH_USER` / `AUTH_PASSWORD` | o login da tela |
+
+O limite de memória está em 1 GB: uma lista de 17 mil tarefas chega a ~364 MB de
+pico enquanto monta a planilha, e abaixo disso o container morre no meio da
+exportação.
+
+Para atualizar depois de um push novo: **Stacks > sua stack > Pull and redeploy**.
+
+## Deploy com Docker simples (sem Swarm)
 
 1. **Stacks > Add stack > Web editor** e cole o conteúdo de `docker-compose.yml`.
 2. Na seção **Environment variables**, cadastre:
@@ -159,6 +186,20 @@ minuto. Uma lista de 17 mil tarefas são ~170 requisições, uns 2 minutos. O ap
 - mostra o progresso na linha (`1.200 de ~17.083 tarefas`);
 - espera e repete sozinho quando toma rate limit (429), em vez de falhar;
 - guarda o arquivo gerado por 5 minutos — baixar a mesma lista de novo é instantâneo.
+
+## Achar os ids
+
+```bash
+npm run descobrir
+```
+
+Imprime a árvore do time — espaços, pastas e listas, com os ids que o app usa.
+Precisa só de `CLICKUP_TOKEN` e `CLICKUP_TEAM_ID` no `.env`.
+
+Isso existe porque **o id que aparece na URL de uma lista é o da view, não o da
+lista**. Em `app.clickup.com/9013302815/v/l/8ckr5gz-2173`, o `8ckr5gz-2173` é a
+view (a API rejeita) e o `9013302815` é o time. O id que o app precisa só sai
+pela API — ou por este script.
 
 ## Diagnóstico (conferir os campos sem expor dados)
 
