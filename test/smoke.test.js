@@ -615,6 +615,33 @@ try {
     assert.ok(pb, 'o segundo cliente ficou preso — ele não recebia progresso nenhum');
   });
 
+  await test('o filtro de concluídas muda a planilha e não colide no cache', async () => {
+    const baixar = async (concluidas) => {
+      const res = await fetch(`${appUrl}/api/lists/901/export.xlsx?concluidas=${concluidas}`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+      const file = path.join(dir, `f-${concluidas}.xlsx`);
+      await writeFile(file, Buffer.from(await res.arrayBuffer()));
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(file);
+      return { linhas: wb.worksheets[0].rowCount - 1, nome: res.headers.get('content-disposition') };
+    };
+
+    const com = await baixar(1);
+    const sem = await baixar(0);
+
+    // A lista 901 tem 3 tarefas, 2 delas "concluídas" (índices 0 e 2).
+    assert.equal(com.linhas, 3);
+    assert.equal(sem.linhas, 1, 'sem concluídas deveria sobrar só a tarefa em aberto');
+    assert.match(sem.nome, /EM-ABERTO/, 'o nome do arquivo deveria distinguir os dois');
+
+    // E de novo, agora que os dois estão em cache: cada um tem que voltar o seu.
+    assert.equal((await baixar(1)).linhas, 3, 'o cache devolveu o arquivo do outro filtro');
+    assert.equal((await baixar(0)).linhas, 1, 'o cache devolveu o arquivo do outro filtro');
+  });
+
   await test('o progresso é reportado durante a exportação', async () => {
     const token = 'token-de-teste';
     const download = fetch(`${appUrl}/api/lists/902/export.xlsx?p=${token}&nocache=1`, {

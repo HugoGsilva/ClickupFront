@@ -349,7 +349,12 @@ export async function getListFields(listId) {
  * Busca todas as tarefas da lista, paginando de 100 em 100 até a última página.
  * `onProgress` recebe o total acumulado a cada página.
  */
-export async function* iterateTaskPages(listId, { signal, maxPages = MAX_PAGES } = {}) {
+export async function* iterateTaskPages(
+  listId,
+  // `incluirConcluidas` vem por chamada, não de config: duas exportações
+  // simultâneas com filtros diferentes não podem compartilhar estado.
+  { signal, maxPages = MAX_PAGES, incluirConcluidas = config.includeClosed } = {},
+) {
   assertId(listId, 'id da lista');
 
   for (let page = 0; page < Math.min(maxPages, MAX_PAGES); page++) {
@@ -358,7 +363,7 @@ export async function* iterateTaskPages(listId, { signal, maxPages = MAX_PAGES }
     const data = await request(`/list/${listId}/task`, {
       page,
       archived: config.includeArchived ? 'true' : 'false',
-      include_closed: config.includeClosed ? 'true' : 'false',
+      include_closed: incluirConcluidas ? 'true' : 'false',
       subtasks: config.includeSubtasks ? 'true' : 'false',
     });
 

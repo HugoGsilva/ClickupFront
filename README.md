@@ -29,7 +29,7 @@ Copie `.env.example` para `.env` e preencha:
 | `CLICKUP_LIST_IDS` | Alternativa à pasta: ids de listas específicas, separados por vírgula. |
 | `CLICKUP_TEAM_ID` | Só para o `npm run descobrir`. É o primeiro número da URL do ClickUp. |
 | `AUTH_USER` / `AUTH_PASSWORD` | Usuário e senha do login do navegador. |
-| `CLICKUP_INCLUDE_CLOSED` | `true` inclui tarefas concluídas (padrão). |
+| `CLICKUP_INCLUDE_CLOSED` | Estado inicial da caixa "Incluir tarefas concluídas" na tela (padrão `true`). Quem exporta decide na hora; esta variável só define como a caixa começa. |
 | `CLICKUP_INCLUDE_SUBTASKS` | `true` inclui subtarefas (padrão). |
 | `CLICKUP_INCLUDE_ARCHIVED` | **Troca** para os itens arquivados, não soma a eles: com `true` a exportação traz *só* o que está arquivado. Padrão `false`. |
 | `APP_TITLE` | Título mostrado no topo. |

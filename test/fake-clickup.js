@@ -154,6 +154,10 @@ export function startFakeClickUp() {
       // Página vazia no meio, sem sinalizar fim.
       if (listId === '903' && page === 1) return send({ tasks: [], last_page: false });
 
+      // include_closed=false esconde as tarefas de índice par, que o makeTask
+      // marca como "concluído" — é o que permite testar o filtro da tela.
+      const semConcluidas = url.searchParams.get('include_closed') === 'false';
+
       const slice = [];
       for (let i = start; i < Math.min(start + 100, list.task_count); i++) {
         const task = makeTask(listId, list.name, i);
@@ -165,6 +169,7 @@ export function startFakeClickUp() {
             value: `valor-${i}`,
           });
         }
+        if (semConcluidas && i % 2 === 0) continue;
         slice.push(task);
       }
       return send({ tasks: slice, last_page: start + 100 >= list.task_count });

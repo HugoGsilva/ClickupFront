@@ -236,7 +236,7 @@ app.get('/api/progress/:token', (req, res) => {
  * As listas chegam já validadas contra o catálogo. Dois cliques na mesma coisa
  * compartilham a mesma geração em vez de dobrar o trabalho na API.
  */
-async function gerarExport({ chave, nomeArquivo, lists, token }) {
+async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas }) {
   const cached = exportCache.get(chave);
   if (cached && Date.now() - cached.at < config.exportCacheSeconds * 1000) {
     setProgress(token, {
@@ -288,7 +288,7 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
         fieldDefinitions: await getListFields(list.id),
         pages: (async function* () {
           avisarTodos(chave, token, { listaAtual: list.name, indice: indice + 1 });
-          for await (const pagina of iterateTaskPages(list.id)) {
+          for await (const pagina of iterateTaskPages(list.id, { incluirConcluidas })) {
             yield pagina;
           }
         })(),
@@ -328,7 +328,8 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
     // com a mensagem mandando "tente de novo", que falharia igual, gastando
     // ~950 requisições do orçamento a cada tentativa.
     let aviso = null;
-    if (totalPrevisto && jaEscritas < totalPrevisto) {
+    // Sem as concluídas, vir menos que o task_count é o esperado, não sintoma.
+    if (incluirConcluidas && totalPrevisto && jaEscritas < totalPrevisto) {
       aviso =
         `O ClickUp informa ${totalPrevisto} tarefas e vieram ${jaEscritas}. ` +
         'A planilha foi gerada assim mesmo — confira se falta algo.';
@@ -370,10 +371,18 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
  * 100 s — mataria a conexão antes do fim. Assim nenhuma requisição fica aberta
  * por mais que alguns segundos.
  */
+/**
+ * Lê um parâmetro booleano da query. Express devolve array quando o parâmetro
+ * se repete na URL, e aí uma comparação direta com string falha em silêncio.
+ */
+function flag(valor, padrao) {
+  const bruto = Array.isArray(valor) ? valor[valor.length - 1] : valor;
+  if (bruto === undefined) return padrao;
+  return bruto === '1' || bruto === 'true';
+}
+
 function despachar(res, token, gerar) {
-  const pedido = res.req.query.async;
-  const querAsync = Array.isArray(pedido) ? pedido.includes('1') : pedido === '1';
-  if (querAsync) {
+  if (flag(res.req.query.async, false)) {
     gerar().catch((err) => {
       setProgress(token, { done: true, error: err.message });
       console.error(`[export] falhou em segundo plano: ${err.message}`);
@@ -397,12 +406,18 @@ app.get('/api/lists/:listId/export.xlsx', async (req, res, next) => {
       return res.status(404).json({ error: 'Lista não encontrada no escopo configurado.' });
     }
 
+    // A chave do cache PRECISA levar o filtro: sem isso, quem desmarcasse a
+    // caixa receberia o arquivo guardado com as concluídas dentro, achando que
+    // tinha filtrado.
+    const incluirConcluidas = flag(req.query.concluidas, config.includeClosed);
+
     return await despachar(res, token, () =>
       gerarExport({
-        chave: `lista:${listId}`,
-        nomeArquivo: buildFileName(list.name),
+        chave: `lista:${listId}:${incluirConcluidas ? 'com' : 'sem'}`,
+        nomeArquivo: buildFileName(list.name + (incluirConcluidas ? '' : ' em aberto')),
         lists: [list],
         token,
+        incluirConcluidas,
       }),
     );
   } catch (err) {
@@ -422,12 +437,15 @@ app.get('/api/export-all.xlsx', async (req, res, next) => {
       return res.status(404).json({ error: 'Nenhuma lista no escopo configurado.' });
     }
 
+    const incluirConcluidas = flag(req.query.concluidas, config.includeClosed);
+
     return await despachar(res, token, () =>
       gerarExport({
-        chave: 'tudo',
-        nomeArquivo: buildFileName(catalog.name || 'tudo'),
+        chave: `tudo:${incluirConcluidas ? 'com' : 'sem'}`,
+        nomeArquivo: buildFileName((catalog.name || 'tudo') + (incluirConcluidas ? '' : ' em aberto')),
         lists,
         token,
+        incluirConcluidas,
       }),
     );
   } catch (err) {

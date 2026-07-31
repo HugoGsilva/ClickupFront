@@ -11,6 +11,7 @@ const els = {
   baixarTudo: document.getElementById('baixar-tudo'),
   tudoDetalhe: document.getElementById('tudo-detalhe'),
   tudoProgresso: document.getElementById('tudo-progresso'),
+  concluidas: document.getElementById('concluidas'),
 };
 
 let allLists = [];
@@ -132,7 +133,10 @@ function saveBlob(blob, fileName) {
  * Serve tanto para uma lista quanto para a pasta inteira — o que muda é a URL,
  * o total esperado e onde o texto de progresso aparece.
  */
-async function baixar({ url, button, status, bar, totalEsperado, nomeFallback }) {
+async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFallback }) {
+  // Vai na URL, e não como estado do servidor: o arquivo guardado em cache é
+  // por filtro, então marcar ou desmarcar a caixa devolve o arquivo certo.
+  const url = `${urlBase}?concluidas=${els.concluidas.checked ? 1 : 0}`;
   const token =
     crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const rotuloOriginal = button.textContent;
