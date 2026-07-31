@@ -1,8 +1,8 @@
 # Stack para Docker Swarm + Traefik (Portainer > Stacks > Add stack > Web editor).
 # Para Docker simples, sem Swarm, use o docker-compose.yml.
 #
-# Preencha na aba "Environment variables" do Portainer:
-#   OBRIGATÓRIAS: CLICKUP_TOKEN, AUTH_USER, AUTH_PASSWORD, DOCKER_IMAGE
+# Preencha na aba "Environment variables" do Portainer — só estas três:
+#   CLICKUP_TOKEN, AUTH_USER, AUTH_PASSWORD
 #
 # O escopo (a pasta e os nomes que aparecem) vem fixo em src/listas.js — não
 # precisa de variável. As de escopo abaixo são só para sobrescrever isso.
@@ -10,7 +10,9 @@ version: "3.8"
 
 services:
   clickup-export:
-    image: ${DOCKER_IMAGE:?DOCKER_IMAGE is required}
+    # Publicada pelo GitHub Actions a cada push. Para travar numa versão
+    # específica, defina DOCKER_IMAGE com uma tag sha-xxxxxxx.
+    image: ${DOCKER_IMAGE:-hugogsilva/clickup-export:latest}
     environment:
       CLICKUP_TOKEN: "${CLICKUP_TOKEN:?CLICKUP_TOKEN is required}"
 
