@@ -11,6 +11,13 @@ const OPTION_B = 'bbbb1111-2222-3333-4444-555566667777';
 export const LISTS = [
   { id: '901', name: 'DIVANEIDE', task_count: 3, orderindex: 0 },
   { id: '902', name: 'ANA CAROLINA', task_count: 250, orderindex: 1 },
+  // Devolve uma página vazia no meio, sem last_page: simula 200 do ClickUp sem
+  // o campo `tasks` (proxy, WAF, hiccup da API). A exportação não pode entregar
+  // um arquivo truncado como se estivesse completo.
+  { id: '903', name: 'LISTA QUE TRUNCA', task_count: 250, orderindex: 2 },
+  // Tem um campo customizado que só aparece a partir da tarefa 150, fora da
+  // primeira página que define as colunas.
+  { id: '904', name: 'LISTA CAMPO TARDIO', task_count: 250, orderindex: 3 },
 ];
 
 export const FIELDS = [
@@ -143,9 +150,22 @@ export function startFakeClickUp() {
 
       const page = Number(url.searchParams.get('page') || 0);
       const start = page * 100;
+
+      // Página vazia no meio, sem sinalizar fim.
+      if (listId === '903' && page === 1) return send({ tasks: [], last_page: false });
+
       const slice = [];
       for (let i = start; i < Math.min(start + 100, list.task_count); i++) {
-        slice.push(makeTask(listId, list.name, i));
+        const task = makeTask(listId, list.name, i);
+        if (listId === '904' && i >= 150) {
+          task.custom_fields.push({
+            id: 'f-tardio',
+            name: 'Campo que aparece tarde',
+            type: 'short_text',
+            value: `valor-${i}`,
+          });
+        }
+        slice.push(task);
       }
       return send({ tasks: slice, last_page: start + 100 >= list.task_count });
     }

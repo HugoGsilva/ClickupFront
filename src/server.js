@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 
 import { config, configProblems } from './config.js';
 import { basicAuth } from './auth.js';
@@ -163,7 +164,7 @@ app.get('/api/lists', async (req, res, next) => {
           id: list.id,
           name: list.name,
           taskCount: list.taskCount,
-          cached: exportCache.has(list.id),
+          cached: exportCache.has(`lista:${list.id}`),
         })),
     });
   } catch (err) {
@@ -218,7 +219,10 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
     for (const [indice, list] of lists.entries()) {
       sheets.push({
         list,
-        fieldDefinitions: await getListFields(list.id).catch(() => []),
+        // Sem engolir o erro: se as definições não vierem, as colunas seriam
+        // descobertas só pela primeira página e campos preenchidos a partir da
+        // tarefa 101 sumiriam da planilha sem aviso.
+        fieldDefinitions: await getListFields(list.id),
         pages: (async function* () {
           setProgress(token, { listaAtual: list.name, indice: indice + 1 });
           for await (const pagina of iterateTaskPages(list.id)) {
@@ -253,11 +257,28 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
 
     jaEscritas = resumo.reduce((soma, aba) => soma + aba.tasks, 0);
 
+    // Uma resposta 200 do ClickUp sem o campo `tasks` é indistinguível de "a
+    // lista acabou": a exportação parava no meio e entregava um .xlsx válido,
+    // com 200, cache de 5 minutos e barra em 100% — só que faltando tarefas.
+    // Planilha de precatório truncada em silêncio é pior do que exportação
+    // nenhuma, então aqui ela falha alto.
+    //
+    // O task_count do ClickUp não conta subtarefas, então o escrito deve ficar
+    // IGUAL OU ACIMA do previsto; abaixo é sinal de que faltou página.
+    if (config.verificarContagem && totalPrevisto && jaEscritas < totalPrevisto) {
+      await fsp.unlink(filePath).catch(() => {});
+      throw new ClickUpError(
+        `Exportação incompleta: o ClickUp informa ${totalPrevisto} tarefas e só ${jaEscritas} foram lidas. ` +
+          'Nenhum arquivo foi entregue para evitar planilha faltando dados. Tente de novo.',
+        502,
+      );
+    }
+
     const { size } = await fsp.stat(filePath);
     const entry = { at: Date.now(), filePath, fileName: nomeArquivo, taskCount: jaEscritas, size };
     rememberExport(chave, entry);
 
-    setProgress(token, { done: true, fetched: jaEscritas, total: jaEscritas, taskCount: jaEscritas });
+    setProgress(token, { done: true, fetched: jaEscritas, taskCount: jaEscritas });
     console.log(
       `[export] ${nomeArquivo}: ${resumo.length} aba(s), ${jaEscritas} tarefas, ${(size / 1048576).toFixed(1)} MB`,
     );
@@ -343,15 +364,24 @@ async function sendWorkbook(res, { filePath, fileName, size }) {
   );
   if (size) res.setHeader('Content-Length', String(size));
 
+  // pipeline() em vez de .pipe(): o .pipe legado NÃO destrói a origem quando o
+  // destino fecha, então cada download interrompido — aba fechada, Esc, wifi
+  // caindo — deixava um file descriptor aberto para sempre. Medido na
+  // auditoria: 400 downloads abortados = 400 fds vazados, sem recuperação, até
+  // o processo bater no limite e TODO download passar a falhar com EMFILE. E o
+  // /health continuava respondendo 200, então o Swarm nunca reiniciaria.
   const stream = fs.createReadStream(filePath);
-
-  // Um stream sem listener de 'error' derruba o processo inteiro.
-  stream.on('error', (err) => {
-    console.error(`[erro] falha ao ler ${filePath}: ${err.message}`);
-    res.destroy(err);
-  });
-
-  return stream.pipe(res);
+  try {
+    await pipeline(stream, res);
+  } catch (err) {
+    // Cliente desistir no meio é rotina, não erro do servidor.
+    if (err?.code !== 'ERR_STREAM_PREMATURE_CLOSE' && !res.writableEnded) {
+      console.error(`[erro] falha ao enviar ${filePath}: ${err.message}`);
+    }
+    stream.destroy();
+    if (!res.headersSent) res.status(500).json({ error: 'Falha ao enviar o arquivo.' });
+    else res.destroy();
+  }
 }
 
 app.use(express.static(publicDir, { index: 'index.html', extensions: ['html'] }));

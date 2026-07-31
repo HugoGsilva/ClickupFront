@@ -45,10 +45,26 @@ export const config = {
   authBlockMs: Number(process.env.AUTH_BLOCK_SECONDS ?? 300) * 1000,
   authWindowMs: Number(process.env.AUTH_WINDOW_SECONDS ?? 900) * 1000,
 
+  // Recusa entregar a planilha quando vêm menos tarefas do que o ClickUp
+  // informa — protege contra exportação truncada em silêncio. Só desligue se
+  // usar include_closed=false, que legitimamente reduz a contagem.
+  verificarContagem: bool('VERIFICAR_CONTAGEM', true),
+
   // Só ligue atrás de um proxy reverso de confiança: com isso o app passa a
   // acreditar no X-Forwarded-For, que qualquer cliente pode forjar se o app
   // estiver exposto direto.
-  trustProxy: (process.env.TRUST_PROXY || '').toLowerCase() === 'true',
+  // "true" no Express significa "confie em TODOS os saltos", e aí ele usa o
+  // valor mais à esquerda do X-Forwarded-For — escolhido pelo cliente. Como o
+  // freio de força bruta é indexado por req.ip, isso deixaria qualquer um
+  // trocar de identidade a cada tentativa. Por isso "true" vira 1 salto: só o
+  // proxy imediatamente à frente é confiável. Um número ou uma sub-rede também
+  // são aceitos e passam direto.
+  trustProxy: (() => {
+    const raw = (process.env.TRUST_PROXY || '').trim();
+    if (!raw || raw.toLowerCase() === 'false') return false;
+    if (raw.toLowerCase() === 'true') return 1;
+    return Number.isFinite(Number(raw)) ? Number(raw) : raw;
+  })(),
 
   appTitle: process.env.APP_TITLE || 'Negócios Precatório',
   port: Number(process.env.PORT || 3000),

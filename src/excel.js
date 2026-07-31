@@ -95,8 +95,14 @@ export function formatCustomFieldValue(field) {
 
     case 'currency':
     case 'number': {
-      const num = Number(value);
-      return Number.isFinite(num) ? num : String(value);
+      // Number('  ') é 0: um campo de valor com só espaços virava R$ 0,00 numa
+      // coluna de precatório, sem erro nenhum. E '1.234,56' virava NaN e caía
+      // como texto numa célula formatada como moeda, que o SOMA ignora em
+      // silêncio. Aqui só vira número o que é inequivocamente número; o resto
+      // fica visível como texto, para alguém perceber em vez de somar errado.
+      const cru = typeof value === 'number' ? String(value) : String(value).trim();
+      if (!cru) return null;
+      return /^-?\d+(\.\d+)?$/.test(cru) ? Number(cru) : cru;
     }
 
     case 'emoji': {
@@ -243,6 +249,7 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
 
   const customColumns = customFields.map((definition) => {
     return {
+      fieldId: definition.id,
       header: definition.name || definition.id,
       width: 22,
       format: customFieldFormat(definition),
@@ -318,8 +325,23 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
     };
 
     let total = 0;
+    const conhecidos = new Set(columns.map((coluna) => coluna.fieldId).filter(Boolean));
+
     const escrever = (pagina) => {
       for (const task of pagina) {
+        // As colunas são fixadas antes da primeira linha (streaming), a partir
+        // da definição da lista mais a primeira página. Um campo preenchido só
+        // a partir da tarefa 101 não teria coluna e sumiria da planilha sem
+        // aviso — com dado de precatório, isso é inaceitável em silêncio.
+        for (const campo of task.custom_fields || []) {
+          if (campo?.id && campo.value != null && campo.value !== '' && !conhecidos.has(campo.id)) {
+            throw new Error(
+              `Campo customizado "${campo.name || campo.id}" apareceu com valor fora das primeiras 100 tarefas ` +
+                `da lista "${list?.name}" e não teria coluna. Exportação abortada para não entregar planilha incompleta.`,
+            );
+          }
+        }
+
         sheet.addRow(columns.map((column) => column.get(task) ?? null)).commit();
         total++;
       }

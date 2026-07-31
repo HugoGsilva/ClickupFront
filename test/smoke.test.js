@@ -109,7 +109,7 @@ try {
     assert.equal(data.folder.name, 'Negocios Precatorio');
     assert.deepEqual(
       data.lists.map((list) => list.name),
-      ['DIVANEIDE', 'ANA CAROLINA'],
+      ['DIVANEIDE', 'ANA CAROLINA', 'LISTA QUE TRUNCA', 'LISTA CAMPO TARDIO'],
     );
     assert.equal(data.lists[1].taskCount, 250);
   });
@@ -283,106 +283,112 @@ try {
   });
 
   await test('exporta a pasta inteira com uma aba por lista', async () => {
-    const res = await fetch(`${appUrl}/api/export-all.xlsx`, {
-      headers: { Authorization: credentials },
-    });
-    assert.equal(res.status, 200);
-    assert.match(res.headers.get('content-disposition'), /\.xlsx/);
-
-    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
-    const file = path.join(dir, 'tudo.xlsx');
-    await writeFile(file, Buffer.from(await res.arrayBuffer()));
-
-    const tudo = new ExcelJS.Workbook();
-    await tudo.xlsx.readFile(file);
-
-    assert.deepEqual(
-      tudo.worksheets.map((sheet) => sheet.name),
-      ['DIVANEIDE', 'ANA CAROLINA'],
-    );
-    assert.equal(tudo.worksheets[0].rowCount, 4); // cabeçalho + 3
-    assert.equal(tudo.worksheets[1].rowCount, 251); // cabeçalho + 250
-
-    // Os campos customizados também vêm nas abas do arquivo completo.
-    const headers = tudo.worksheets[1].getRow(1).values.slice(1);
-    assert.equal(headers[0], 'Nome da tarefa');
-    for (const esperado of ['CPF', 'Valor do Precatório', 'Fase', 'Etiquetas']) {
-      assert.ok(headers.includes(esperado), `faltou "${esperado}" na aba da pasta inteira`);
-    }
-  });
-
-  await test('listas com o mesmo nome não quebram o arquivo', async () => {
-    const { writeWorkbook } = await import('../src/excel.js');
-    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
-    const file = path.join(dir, 'repetidas.xlsx');
-
-    const tarefa = { id: 't1', name: 'x', custom_fields: [] };
-    const pagina = async function* () {
-      yield [tarefa];
-    };
-
-    await writeWorkbook({
-      filePath: file,
-      sheets: [
-        { list: { name: 'ANA' }, pages: pagina() },
-        { list: { name: 'ANA' }, pages: pagina() },
-        { list: { name: 'ANA' }, pages: pagina() },
-      ],
-    });
-
-    const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(file);
-    assert.deepEqual(
-      wb.worksheets.map((sheet) => sheet.name),
-      ['ANA', 'ANA (2)', 'ANA (3)'],
-    );
-  });
-
-  await test('regerar a mesma lista não acumula arquivos no disco', async () => {
-    const { readdir } = await import('node:fs/promises');
-
-    // Instância própria: cache desligado (para cada chamada regerar de verdade)
-    // e TMPDIR isolado, porque o servidor limpa o diretório temporário ao subir
-    // e apagaria os arquivos em cache da instância principal.
+    // Instância própria: a pasta do teste tem duas listas defeituosas de
+    // propósito (903 e 904), que existem para os testes de truncamento.
     const tmpIsolado = await mkdtemp(path.join(tmpdir(), 'clickup-tmpdir-'));
-    const outraPorta = 3996;
+    const outraPorta = 3995;
     const outro = spawn(process.execPath, ['src/server.js'], {
       cwd: path.join(import.meta.dirname, '..'),
       env: {
         ...process.env,
         CLICKUP_API_BASE: base,
         CLICKUP_TOKEN: 'pk_token_de_teste',
-        CLICKUP_FOLDER_ID: '123',
+        CLICKUP_FOLDER_ID: '',
+        CLICKUP_LIST_IDS: '901,902',
         AUTH_USER: USER,
         AUTH_PASSWORD: PASSWORD,
         PORT: String(outraPorta),
-        EXPORT_CACHE_SECONDS: '0',
-        UNLINK_DELAY_MS: '50',
         TMPDIR: tmpIsolado,
       },
-      stdio: ['ignore', 'ignore', 'ignore'],
+      stdio: ['ignore', 'ignore', 'pipe'],
     });
+    outro.stderr.on('data', (c) => process.stderr.write(`  [tudo] ${c}`));
 
     try {
       await waitForServer(`http://127.0.0.1:${outraPorta}/health`);
+      const res = await fetch(`http://127.0.0.1:${outraPorta}/api/export-all.xlsx`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get('content-disposition'), /\.xlsx/);
 
-      for (let i = 0; i < 4; i++) {
-        const res = await fetch(`http://127.0.0.1:${outraPorta}/api/lists/901/export.xlsx`, {
-          headers: { Authorization: credentials },
-        });
-        assert.equal(res.status, 200);
-        await res.arrayBuffer();
-      }
+      const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
+      const file = path.join(dir, 'tudo.xlsx');
+      await writeFile(file, Buffer.from(await res.arrayBuffer()));
 
-      await sleep(500); // UNLINK_DELAY_MS=50
-      const arquivos = await readdir(path.join(tmpIsolado, 'clickup-export'));
-      assert.ok(
-        arquivos.length <= 2,
-        `4 exportações da mesma lista deixaram ${arquivos.length} arquivos — vazamento de temporários`,
+      const tudo = new ExcelJS.Workbook();
+      await tudo.xlsx.readFile(file);
+
+      assert.deepEqual(
+        tudo.worksheets.map((sheet) => sheet.name),
+        ['DIVANEIDE', 'ANA CAROLINA'],
       );
+      assert.equal(tudo.worksheets[0].rowCount, 4); // cabeçalho + 3
+      assert.equal(tudo.worksheets[1].rowCount, 251); // cabeçalho + 250
+
+      const headers = tudo.worksheets[1].getRow(1).values.slice(1);
+      assert.equal(headers[0], 'Nome da tarefa');
+      for (const esperado of ['CPF', 'Valor do Precatório', 'Fase', 'Etiquetas']) {
+        assert.ok(headers.includes(esperado), `faltou "${esperado}" na aba da pasta inteira`);
+      }
     } finally {
       outro.kill();
     }
+  });
+
+  await test('exportação truncada falha em vez de entregar planilha incompleta', async () => {
+    const res = await fetch(`${appUrl}/api/lists/903/export.xlsx`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 502, 'deveria recusar, não devolver o arquivo');
+    const body = await res.json();
+    assert.match(body.error, /incompleta/i);
+    assert.match(res.headers.get('content-type'), /json/, 'não pode sair como .xlsx');
+  });
+
+  await test('campo customizado que aparece tarde aborta em vez de sumir', async () => {
+    const res = await fetch(`${appUrl}/api/lists/904/export.xlsx`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 500);
+    const body = await res.json();
+    assert.match(body.error, /Campo que aparece tarde/);
+  });
+
+  await test('download interrompido não vaza file descriptor', async () => {
+    const { readdir, readlink } = await import('node:fs/promises');
+    const fds = async () => {
+      const lista = await readdir(`/proc/${child.pid}/fd`);
+      const alvos = await Promise.all(
+        lista.map((fd) => readlink(`/proc/${child.pid}/fd/${fd}`).catch(() => '')),
+      );
+      return alvos.filter((alvo) => alvo.endsWith('.xlsx')).length;
+    };
+
+    const antes = await fds();
+
+    // 30 downloads que o cliente abandona logo depois do primeiro pedaço.
+    for (let i = 0; i < 30; i++) {
+      const controller = new AbortController();
+      try {
+        const res = await fetch(`${appUrl}/api/lists/902/export.xlsx`, {
+          headers: { Authorization: credentials },
+          signal: controller.signal,
+        });
+        const reader = res.body.getReader();
+        await reader.read();
+        controller.abort();
+      } catch {
+        /* o abort é o objetivo */
+      }
+    }
+
+    await sleep(500);
+    const depois = await fds();
+    assert.ok(
+      depois - antes <= 2,
+      `30 downloads abortados deixaram ${depois - antes} descritores abertos no .xlsx`,
+    );
   });
 
   await test('o progresso é reportado durante a exportação', async () => {

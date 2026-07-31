@@ -34,7 +34,9 @@ services:
 
       # Traefik está na frente, então o app pode confiar no X-Forwarded-For
       # para identificar o cliente no freio de força bruta.
-      TRUST_PROXY: "true"
+      # 1 = confie só no salto imediatamente à frente (o Traefik). "true"
+      # confiaria em qualquer X-Forwarded-For, inclusive forjado.
+      TRUST_PROXY: "1"
 
       APP_TITLE: "${APP_TITLE:-Negócios Precatório}"
       TZ: "${TZ:-America/Sao_Paulo}"
