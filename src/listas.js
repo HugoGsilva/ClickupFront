@@ -37,13 +37,41 @@ export const LISTAS_PADRAO = [
 export const IDS_PADRAO = LISTAS_PADRAO.map((lista) => lista.id);
 
 /**
+ * Colunas padrão da tarefa: quais entram e com que título.
+ *
+ * O título tem que ser igual ao do ClickUp — é o que a equipe reconhece. Se
+ * algum estiver diferente do que aparece aí, corrija SÓ o `titulo`: a `chave` é
+ * o que liga à API e não deve mudar.
+ *
+ * Para tirar uma coluna, comente ou apague a linha. Para reordenar, mude a
+ * ordem — elas saem antes dos campos customizados, nesta sequência.
+ */
+export const COLUNAS_PADRAO = [
+  { chave: 'nome', titulo: 'Nome da tarefa' },
+  { chave: 'id', titulo: 'ID da tarefa' },
+  { chave: 'status', titulo: 'Status' },
+  { chave: 'responsaveis', titulo: 'Responsáveis' },
+  { chave: 'etiquetas', titulo: 'Etiquetas' },
+  { chave: 'criacao', titulo: 'Data de criação' },
+  { chave: 'atualizacao', titulo: 'Data da última atualização' },
+  { chave: 'inicio', titulo: 'Data de início' },
+  { chave: 'vencimento', titulo: 'Data de vencimento' },
+  { chave: 'conclusao', titulo: 'Data de conclusão' },
+  { chave: 'fechamento', titulo: 'Data de fechamento' },
+];
+
+/**
  * Campos customizados que NÃO devem virar coluna.
  *
  * Por padrão todo campo customizado é exportado, inclusive os que vêm sempre
  * vazios — a planilha reflete a estrutura da lista. Quem entrar aqui fica de
  * fora. Use o nome exato como aparece no ClickUp.
  */
-export const CAMPOS_OCULTOS = [];
+export const CAMPOS_OCULTOS = [
+  // Botão da interface do ClickUp: não carrega dado. Campos do tipo `button` já
+  // ficam de fora automaticamente; está aqui para o caso de mudar de tipo.
+  'Msg Proposta Pronta',
+];
 
 /**
  * Ordem das colunas de campo customizado na planilha.

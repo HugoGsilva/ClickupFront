@@ -205,15 +205,31 @@ try {
     assert.equal(sheet.rowCount, 4); // cabeçalho + 3 tarefas
   });
 
-  await test('traz só o nome da tarefa como coluna padrão', () => {
+  await test('traz as colunas padrão configuradas, com os títulos do ClickUp', async () => {
+    const { COLUNAS_PADRAO } = await import('../src/listas.js');
     const headers = sheet.getRow(1).values.slice(1);
-    assert.equal(headers[0], 'Nome da tarefa');
 
-    // Colunas do ClickUp que ficaram de fora de propósito: a planilha é sobre
-    // os campos customizados.
-    for (const fora of ['ID', 'Status', 'Prioridade', 'Responsáveis', 'Prazo', 'Descrição', 'Link']) {
+    // Os títulos e a ordem vêm de src/listas.js, e vêm antes dos customizados.
+    assert.deepEqual(
+      headers.slice(0, COLUNAS_PADRAO.length),
+      COLUNAS_PADRAO.map((c) => c.titulo),
+    );
+
+    // Deixadas de fora de propósito.
+    for (const fora of ['Prioridade', 'Descrição', 'Link', 'Tempo estimado (h)', 'Tarefa pai']) {
       assert.ok(!headers.includes(fora), `"${fora}" não deveria estar na planilha`);
     }
+  });
+
+  await test('as duas datas de fim do ClickUp saem em colunas separadas', () => {
+    const headers = sheet.getRow(1).values.slice(1);
+    const at = (name, row) => sheet.getRow(row).getCell(headers.indexOf(name) + 1).value;
+
+    // date_done e date_closed não coincidem no ClickUp: exportar só uma
+    // deixaria a coluna quase vazia nas listas reais.
+    assert.ok(headers.includes('Data de conclusão'));
+    assert.ok(headers.includes('Data de fechamento'));
+    assert.ok(at('Data de criação', 2) instanceof Date);
   });
 
   await test('traz uma coluna por campo customizado, inclusive os herdados', () => {
@@ -224,7 +240,7 @@ try {
       'Fase',
       'Data da audiência',
       'Documentos OK',
-      'Etiquetas',
+      'Etiquetas do processo',
       'Campo herdado',
     ]) {
       assert.ok(headers.includes(expected), `faltou o campo customizado "${expected}"`);
@@ -301,10 +317,14 @@ try {
     assert.equal(at('Fase', 3), 'Pago');
     assert.equal(at('Documentos OK', 2), 'Sim');
     assert.equal(at('Documentos OK', 3), 'Não');
-    assert.equal(at('Etiquetas', 2), 'Urgente, Revisar');
+    assert.equal(at('Etiquetas do processo', 2), 'Urgente, Revisar');
     assert.ok(at('Data da audiência', 2) instanceof Date, 'data deveria virar data de verdade');
     assert.equal(at('Campo herdado', 2), 'valor solto');
     assert.equal(at('Nome da tarefa', 2), 'Tarefa 0 — DIVANEIDE');
+    assert.equal(at('ID da tarefa', 2), 't901-0');
+    assert.equal(at('Status', 2), 'concluído');
+    assert.equal(at('Responsáveis', 2), 'Hugo Silva');
+    assert.equal(at('Etiquetas', 2), 'precatorio');
   });
 
   await test('cabeçalho congelado e autofiltro ativos', () => {
@@ -373,7 +393,7 @@ try {
 
       const headers = tudo.worksheets[1].getRow(1).values.slice(1);
       assert.equal(headers[0], 'Nome da tarefa');
-      for (const esperado of ['CPF', 'Valor do Precatório', 'Fase', 'Etiquetas']) {
+      for (const esperado of ['CPF', 'Valor do Precatório', 'Fase', 'Etiquetas do processo']) {
         assert.ok(headers.includes(esperado), `faltou "${esperado}" na aba da pasta inteira`);
       }
     } finally {

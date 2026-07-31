@@ -43,7 +43,7 @@ export const FIELDS = [
   { id: 'f-ok', name: 'Documentos OK', type: 'checkbox', type_config: {} },
   {
     id: 'f-tags',
-    name: 'Etiquetas',
+    name: 'Etiquetas do processo',
     type: 'labels',
     type_config: { options: [{ id: OPTION_A, label: 'Urgente' }, { id: OPTION_B, label: 'Revisar' }] },
   },
@@ -60,7 +60,7 @@ function makeTask(listId, listName, index) {
     { id: 'f-fase', name: 'Fase', type: 'drop_down', value: index % 2 === 0 ? OPTION_A : OPTION_B },
     { id: 'f-audiencia', name: 'Data da audiência', type: 'date', value: String(1_760_000_000_000 + index * 86_400_000) },
     { id: 'f-ok', name: 'Documentos OK', type: 'checkbox', value: index % 3 === 0 ? 'true' : 'false' },
-    { id: 'f-tags', name: 'Etiquetas', type: 'labels', value: index % 2 === 0 ? [OPTION_A, OPTION_B] : [] },
+    { id: 'f-tags', name: 'Etiquetas do processo', type: 'labels', value: index % 2 === 0 ? [OPTION_A, OPTION_B] : [] },
   ];
 
   // Campo herdado, presente só na tarefa.

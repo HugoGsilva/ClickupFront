@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { ORDEM_DOS_CAMPOS, CAMPOS_OCULTOS } from './listas.js';
+import { ORDEM_DOS_CAMPOS, CAMPOS_OCULTOS, COLUNAS_PADRAO } from './listas.js';
 
 const MAX_CELL_LENGTH = 32_000; // limite do Excel é 32.767 caracteres por célula
 
@@ -220,18 +220,38 @@ function collectCustomFields(fieldDefinitions, tasks) {
 }
 
 /**
- * Colunas padrão da tarefa.
+ * Como cada coluna padrão é lida da tarefa. A chave vem de COLUNAS_PADRAO, em
+ * src/listas.js, que decide quais entram, em que ordem e com que título.
  *
- * Só o nome, por decisão de escopo: a planilha é sobre os campos customizados
- * (CPF, processo, valores, fase), e as demais colunas do ClickUp — prioridade,
- * prazo, tempos, responsáveis — vinham vazias nesta operação. Para trazer
- * alguma de volta, é só acrescentar aqui:
- *
- *   { header: 'Status', width: 18, get: (task) => task.status?.status || '' },
- *   { header: 'Link',   width: 32, get: (task) => task.url || '' },
+ * Sobre as duas datas de fim: o ClickUp tem `date_done` (concluída) e
+ * `date_closed` (fechada), e elas não coincidem — nas tarefas reais desta pasta
+ * a primeira vem preenchida em 95% e a segunda em 1,5%. Exportar só uma
+ * deixaria a coluna praticamente vazia.
  */
+const LEITORES_PADRAO = {
+  nome: { width: 45, get: (task) => truncate(task.name || '') },
+  id: { width: 14, get: (task) => task.id || '' },
+  status: { width: 18, get: (task) => task.status?.status || '' },
+  responsaveis: { width: 24, get: (task) => names(task.assignees, 'username', 'email') },
+  etiquetas: { width: 22, get: (task) => names(task.tags, 'name') },
+  criacao: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_created) },
+  atualizacao: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_updated) },
+  inicio: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.start_date) },
+  vencimento: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.due_date) },
+  conclusao: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_done) },
+  fechamento: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_closed) },
+};
+
 function standardColumns() {
-  return [{ header: 'Nome da tarefa', width: 45, get: (task) => truncate(task.name || '') }];
+  return COLUNAS_PADRAO.map(({ chave, titulo }) => {
+    const leitor = LEITORES_PADRAO[chave];
+    if (!leitor) {
+      throw new Error(
+        `COLUNAS_PADRAO tem a chave "${chave}", que não existe. Chaves válidas: ${Object.keys(LEITORES_PADRAO).join(', ')}.`,
+      );
+    }
+    return { header: titulo, ...leitor };
+  });
 }
 
 /**

@@ -112,11 +112,26 @@ para o Docker conseguir monitorar o container.
 
 ## O que sai na planilha
 
-Uma aba por lista, uma linha por tarefa, **20 colunas**:
+Uma aba por lista, uma linha por tarefa, **30 colunas**:
 
-1. `Nome da tarefa`
+1. **11 colunas padrão da tarefa**, com os títulos do ClickUp: `Nome da tarefa`,
+   `ID da tarefa`, `Status`, `Responsáveis`, `Etiquetas` e as cinco datas
+   (`Data de criação`, `Data da última atualização`, `Data de início`,
+   `Data de vencimento`, `Data de conclusão`, `Data de fechamento`).
 2. Os **19 campos customizados**, na ordem definida em `src/listas.js`
    (`ORDEM_DOS_CAMPOS`) — do `03 - CPF` ao `Previdenciário?`.
+
+Os títulos das colunas padrão ficam em `COLUNAS_PADRAO` (`src/listas.js`): eles
+têm que ser iguais aos do ClickUp, então estão lá para corrigir sem mexer na
+lógica. A `chave` de cada uma liga à API e não deve mudar; só o `titulo` é livre.
+
+> O ClickUp tem **duas** datas de fim, e elas não coincidem: `Data de conclusão`
+> (`date_done`) e `Data de fechamento` (`date_closed`). Nas tarefas reais desta
+> pasta, a primeira vem preenchida em 93% e a segunda em 4%. Por isso as duas
+> saem, em colunas separadas.
+
+`Prioridade` e `Msg Proposta Pronta` ficam de fora, a pedido — a primeira nem
+entra em `COLUNAS_PADRAO`, a segunda está em `CAMPOS_OCULTOS`.
 
 Campo customizado vira coluna **mesmo quando está vazio em todas as tarefas** —
 a planilha reflete a estrutura da lista, não só o que foi preenchido. Campo do
