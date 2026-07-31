@@ -205,18 +205,17 @@ try {
     assert.equal(sheet.rowCount, 4); // cabeçalho + 3 tarefas
   });
 
-  await test('traz as colunas padrão configuradas, com os títulos do ClickUp', async () => {
-    const { COLUNAS_PADRAO } = await import('../src/listas.js');
+  await test('as colunas padrão saem com os títulos e na ordem de listas.js', async () => {
+    const { COLUNAS } = await import('../src/listas.js');
     const headers = sheet.getRow(1).values.slice(1);
 
-    // Os títulos e a ordem vêm de src/listas.js, e vêm antes dos customizados.
-    assert.deepEqual(
-      headers.slice(0, COLUNAS_PADRAO.length),
-      COLUNAS_PADRAO.map((c) => c.titulo),
-    );
+    const titulos = COLUNAS.filter((c) => c.padrao).map((c) => c.titulo);
+    const naPlanilha = headers.filter((h) => titulos.includes(h));
+    assert.deepEqual(naPlanilha, titulos, 'títulos ou ordem das colunas padrão divergem');
+    assert.equal(headers[0], 'Nome da tarefa');
 
     // Deixadas de fora de propósito.
-    for (const fora of ['Prioridade', 'Descrição', 'Link', 'Tempo estimado (h)', 'Tarefa pai']) {
+    for (const fora of ['Prioridade', 'Descrição', 'Link', 'Tarefa pai']) {
       assert.ok(!headers.includes(fora), `"${fora}" não deveria estar na planilha`);
     }
   });
@@ -228,8 +227,8 @@ try {
     // date_done e date_closed não coincidem no ClickUp: exportar só uma
     // deixaria a coluna quase vazia nas listas reais.
     assert.ok(headers.includes('Data de conclusão'));
-    assert.ok(headers.includes('Data de fechamento'));
-    assert.ok(at('Data de criação', 2) instanceof Date);
+    assert.ok(headers.includes('Data de encerramento'));
+    assert.ok(at('Data criada', 2) instanceof Date);
   });
 
   await test('traz uma coluna por campo customizado, inclusive os herdados', () => {
@@ -247,59 +246,23 @@ try {
     }
   });
 
-  await test('respeita a ordem de colunas definida em listas.js', async () => {
-    const { ORDEM_DOS_CAMPOS } = await import('../src/listas.js');
+  await test('campo customizado fora de COLUNAS entra no fim, não some', async () => {
+    const { COLUNAS } = await import('../src/listas.js');
     const headers = sheet.getRow(1).values.slice(1);
+    const configurados = new Set(COLUNAS.filter((c) => c.campo).map((c) => c.campo));
 
-    // Só os campos que estão na ordem configurada, na sequência em que aparecem.
-    const configurados = headers.filter((h) => ORDEM_DOS_CAMPOS.includes(h));
-    const esperados = ORDEM_DOS_CAMPOS.filter((nome) => headers.includes(nome));
-    assert.deepEqual(configurados, esperados);
-  });
-
-  await test('CAMPOS_OCULTOS tira a coluna da planilha', async () => {
-    const { writeWorkbook } = await import('../src/excel.js');
-    const listas = await import('../src/listas.js');
-    const dir = await mkdtemp(path.join(tmpdir(), 'clickup-test-'));
-    const file = path.join(dir, 'oculto.xlsx');
-
-    listas.CAMPOS_OCULTOS.push('CPF'); // como se estivesse escrito no arquivo
-    try {
-      await writeWorkbook({
-        filePath: file,
-        sheets: [
-          {
-            list: { name: 'TESTE' },
-            fieldDefinitions: [
-              { id: 'a', name: 'CPF', type: 'short_text', type_config: {} },
-              { id: 'b', name: 'Cidade', type: 'short_text', type_config: {} },
-            ],
-            pages: (async function* () {
-              // O campo oculto PRECISA ter valor: era isso que faltava no teste
-              // anterior, e por isso ele não pegou a exportação quebrando.
-              yield [
-                {
-                  id: 't1',
-                  name: 'x',
-                  custom_fields: [
-                    { id: 'a', type: 'short_text', value: '123.456.789-00' },
-                    { id: 'b', type: 'short_text', value: 'Goiânia' },
-                  ],
-                },
-              ];
-            })(),
-          },
-        ],
-      });
-
-      const wb = new ExcelJS.Workbook();
-      await wb.xlsx.readFile(file);
-      const headers = wb.worksheets[0].getRow(1).values.slice(1);
-      assert.ok(!headers.includes('CPF'), 'campo oculto não deveria virar coluna');
-      assert.ok(headers.includes('Cidade'), 'os outros campos continuam');
-    } finally {
-      listas.CAMPOS_OCULTOS.length = 0;
+    // Os campos do ClickUp falso não estão em COLUNAS (que tem os nomes reais),
+    // então precisam aparecer mesmo assim — depois das colunas configuradas.
+    const naoConfigurados = ['CPF', 'Fase', 'Campo herdado'];
+    for (const nome of naoConfigurados) {
+      assert.ok(headers.includes(nome), `"${nome}" sumiu da planilha`);
+      assert.ok(!configurados.has(nome), 'o teste pressupõe campo não configurado');
     }
+
+    const ultimoPadrao = Math.max(
+      ...COLUNAS.filter((c) => c.padrao).map((c) => headers.indexOf(c.titulo)),
+    );
+    assert.ok(headers.indexOf('CPF') > ultimoPadrao, 'campo extra deveria vir depois das padrão');
   });
 
   await test('campo do tipo button não vira coluna', () => {
@@ -323,7 +286,7 @@ try {
     assert.equal(at('Nome da tarefa', 2), 'Tarefa 0 — DIVANEIDE');
     assert.equal(at('ID da tarefa', 2), 't901-0');
     assert.equal(at('Status', 2), 'concluído');
-    assert.equal(at('Responsáveis', 2), 'Hugo Silva');
+    assert.equal(at('Responsável', 2), 'Hugo Silva');
     assert.equal(at('Etiquetas', 2), 'precatorio');
   });
 

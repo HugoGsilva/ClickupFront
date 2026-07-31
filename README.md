@@ -112,59 +112,64 @@ para o Docker conseguir monitorar o container.
 
 ## O que sai na planilha
 
-Uma aba por lista, uma linha por tarefa, **30 colunas**:
+Uma aba por lista, uma linha por tarefa, **30 colunas** — os mesmos nomes e a
+mesma ordem do seletor de colunas do ClickUp:
 
-1. **11 colunas padrão da tarefa**, com os títulos do ClickUp: `Nome da tarefa`,
-   `ID da tarefa`, `Status`, `Responsáveis`, `Etiquetas` e as cinco datas
-   (`Data de criação`, `Data da última atualização`, `Data de início`,
-   `Data de vencimento`, `Data de conclusão`, `Data de fechamento`).
-2. Os **19 campos customizados**, na ordem definida em `src/listas.js`
-   (`ORDEM_DOS_CAMPOS`) — do `03 - CPF` ao `Previdenciário?`.
+```
+Nome da tarefa · 03 - CPF · 02 - Telefone · 04 - NrProcesso · 01 - Ação
+05 - Cidade · 07 - Valor Bruto · 06 - UF · 08 - Valor Liquido
+09 - Valor Proposta · 10 - Valor Fechado · 11 - Fundo
+12 - Honorários destacados? · 13 - Data de Encerramento · 14 - Intermediação
+Juridíco · 15 - Comissão · Ação Coletiva? · Previdenciário?
+16 - Data de Expedição · Etiquetas · Data criada · Data de atualização
+Data de conclusão · Data de encerramento · Data de vencimento · Data inicial
+Responsável · ID da tarefa · Status
+```
 
-Os títulos das colunas padrão ficam em `COLUNAS_PADRAO` (`src/listas.js`): eles
-têm que ser iguais aos do ClickUp, então estão lá para corrigir sem mexer na
-lógica. A `chave` de cada uma liga à API e não deve mudar; só o `titulo` é livre.
+Tudo isso vem de **`COLUNAS`**, em `src/listas.js` — uma lista só, na ordem da
+planilha:
 
-> O ClickUp tem **duas** datas de fim, e elas não coincidem: `Data de conclusão`
-> (`date_done`) e `Data de fechamento` (`date_closed`). Nas tarefas reais desta
-> pasta, a primeira vem preenchida em 93% e a segunda em 4%. Por isso as duas
-> saem, em colunas separadas.
+```js
+{ padrao: 'nome', titulo: 'Nome da tarefa' },  // coluna da tarefa
+{ campo: '03 - CPF' },                          // campo customizado, pelo nome
+```
 
-`Prioridade` e `Msg Proposta Pronta` ficam de fora, a pedido — a primeira nem
-entra em `COLUNAS_PADRAO`, a segunda está em `CAMPOS_OCULTOS`.
+`padrao` liga a um leitor em `src/excel.js` e não muda; o `titulo` é livre, e é
+onde se corrige um nome que esteja diferente do ClickUp. Chave inexistente falha
+na subida, listando as válidas.
+
+> O ClickUp tem **duas** datas de fim e elas não coincidem: `Data de conclusão`
+> (`date_done`) e `Data de encerramento` (`date_closed`). Nas tarefas reais
+> desta pasta, a primeira vem preenchida em 93% e a segunda em 4%. Por isso as
+> duas saem.
+
+`Prioridade` e `Msg Proposta Pronta` ficam de fora, a pedido.
 
 Campo customizado vira coluna **mesmo quando está vazio em todas as tarefas** —
 a planilha reflete a estrutura da lista, não só o que foi preenchido. Campo do
 tipo `button` fica de fora: é ação de interface, não dado.
 
-Outras colunas do ClickUp (Prioridade, Descrição, Link, tempo estimado, tarefa
-pai) não são exportadas. Para trazer alguma, veja a tabela abaixo.
-
 ### Mudar as colunas
 
-Tudo fica em **`src/listas.js`**, sem tocar na lógica:
+Tudo em **`src/listas.js`**, sem tocar na lógica:
 
 | O que você quer | Onde mexer |
 | --- | --- |
-| Renomear uma coluna padrão | mude o `titulo` em `COLUNAS_PADRAO` (a `chave` não muda) |
-| Tirar uma coluna padrão | apague a linha dela em `COLUNAS_PADRAO` |
-| Reordenar as colunas padrão | mude a ordem de `COLUNAS_PADRAO` |
-| Reordenar os campos customizados | mude a ordem de `ORDEM_DOS_CAMPOS` |
-| Tirar um campo customizado | acrescente o nome dele em `CAMPOS_OCULTOS` |
+| Renomear uma coluna | mude o `titulo` (colunas padrão) — campo customizado usa o nome do ClickUp |
+| Tirar uma coluna | apague a linha dela em `COLUNAS` |
+| Reordenar | mude a ordem em `COLUNAS` |
+| Nunca exportar um campo | acrescente o nome em `CAMPOS_OCULTOS` |
 | Incluir um campo novo do ClickUp | **nada** — ele aparece sozinho, no fim |
-| Colocar o campo novo numa posição | acrescente o nome em `ORDEM_DOS_CAMPOS` |
+
+Campo customizado que exista nas tarefas e não esteja em `COLUNAS` não é
+descartado: entra no fim. Assim um campo novo criado no ClickUp aparece na
+planilha sem ninguém precisar lembrar de atualizar o código.
 
 Colunas padrão que ainda não têm leitor (Prioridade, Descrição, Link…) precisam
-de uma linha em `LEITORES_PADRAO`, em `src/excel.js` — o arquivo mostra o
-formato, e uma chave inexistente em `COLUNAS_PADRAO` falha na hora, com a lista
-das válidas.
+de uma linha em `LEITORES_PADRAO`, em `src/excel.js`.
 
 Depois de editar: `git push` → o CI publica a imagem → *Pull and redeploy* no
 Portainer.
-
-Campo customizado que exista nas tarefas mas não esteja em `ORDEM_DOS_CAMPOS`
-não é descartado: entra no fim. Assim um campo novo criado no ClickUp aparece na
-planilha sem ninguém precisar lembrar de atualizar o código.
 
 Os valores vêm convertidos, não crus: `drop_down` mostra o nome da opção (e não
 o id), `labels` vira a lista de etiquetas separada por vírgula, `checkbox` vira

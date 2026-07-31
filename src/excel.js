@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { ORDEM_DOS_CAMPOS, CAMPOS_OCULTOS, COLUNAS_PADRAO } from './listas.js';
+import { COLUNAS, CAMPOS_OCULTOS } from './listas.js';
 
 const MAX_CELL_LENGTH = 32_000; // limite do Excel é 32.767 caracteres por célula
 
@@ -202,16 +202,6 @@ function collectCustomFields(fieldDefinitions, tasks) {
       !CAMPOS_OCULTOS.includes(definition.name),
   );
 
-  // Ordem definida em src/listas.js. Quem não está lá vai para o fim, em vez de
-  // sumir — assim um campo novo no ClickUp aparece na planilha sem ninguém
-  // precisar lembrar de atualizar a lista.
-  const posicao = (definition) => {
-    const indice = ORDEM_DOS_CAMPOS.indexOf(definition.name);
-    return indice === -1 ? ORDEM_DOS_CAMPOS.length : indice;
-  };
-
-  encontrados.sort((a, b) => posicao(a) - posicao(b));
-
   // `vistos` inclui o que foi deixado de fora de propósito (button e
   // CAMPOS_OCULTOS). Sem essa separação, esconder um campo o tornava
   // "desconhecido" e a trava de campo tardio abortava toda exportação em que
@@ -220,7 +210,7 @@ function collectCustomFields(fieldDefinitions, tasks) {
 }
 
 /**
- * Como cada coluna padrão é lida da tarefa. A chave vem de COLUNAS_PADRAO, em
+ * Como cada coluna padrão é lida da tarefa. A chave vem de COLUNAS, em
  * src/listas.js, que decide quais entram, em que ordem e com que título.
  *
  * Sobre as duas datas de fim: o ClickUp tem `date_done` (concluída) e
@@ -232,27 +222,15 @@ const LEITORES_PADRAO = {
   nome: { width: 45, get: (task) => truncate(task.name || '') },
   id: { width: 14, get: (task) => task.id || '' },
   status: { width: 18, get: (task) => task.status?.status || '' },
-  responsaveis: { width: 24, get: (task) => names(task.assignees, 'username', 'email') },
+  responsavel: { width: 24, get: (task) => names(task.assignees, 'username', 'email') },
   etiquetas: { width: 22, get: (task) => names(task.tags, 'name') },
   criacao: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_created) },
   atualizacao: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_updated) },
-  inicio: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.start_date) },
+  inicial: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.start_date) },
   vencimento: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.due_date) },
   conclusao: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_done) },
-  fechamento: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_closed) },
+  encerramento: { width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_closed) },
 };
-
-function standardColumns() {
-  return COLUNAS_PADRAO.map(({ chave, titulo }) => {
-    const leitor = LEITORES_PADRAO[chave];
-    if (!leitor) {
-      throw new Error(
-        `COLUNAS_PADRAO tem a chave "${chave}", que não existe. Chaves válidas: ${Object.keys(LEITORES_PADRAO).join(', ')}.`,
-      );
-    }
-    return { header: titulo, ...leitor };
-  });
-}
 
 /**
  * Nome de aba aceito pelo Excel: sem os caracteres proibidos, no máximo 31
@@ -278,7 +256,7 @@ function sanitizeSheetName(name, usados) {
 }
 
 /**
- * Colunas da aba: padrão + uma por campo customizado + descrição e link no fim.
+ * Colunas da aba, na ordem e com os títulos de COLUNAS (src/listas.js).
  *
  * `amostra` é a primeira página de tarefas. Na escrita em streaming as colunas
  * precisam estar definidas antes da primeira linha, então os campos herdados
@@ -288,27 +266,56 @@ function sanitizeSheetName(name, usados) {
 function buildColumns(fieldDefinitions = [], amostra = []) {
   const { colunas: customFields, vistos } = collectCustomFields(fieldDefinitions, amostra);
 
-  const customColumns = customFields.map((definition) => {
-    return {
-      fieldId: definition.id,
-      header: definition.name || definition.id,
-      width: 22,
-      format: customFieldFormat(definition),
-      get: (task) => {
-        const field = (task.custom_fields || []).find((candidate) => candidate.id === definition.id);
-        if (!field) return null;
-        // A definição da lista traz o type_config completo; o da tarefa pode vir
-        // resumido, então damos preferência ao da lista para resolver as opções.
-        return formatCustomFieldValue({
-          ...field,
-          type: field.type || definition.type,
-          type_config: definition.type_config || field.type_config,
-        });
-      },
-    };
+  const colunaDeCampo = (definition) => ({
+    fieldId: definition.id,
+    header: definition.name || definition.id,
+    width: 22,
+    format: customFieldFormat(definition),
+    get: (task) => {
+      const field = (task.custom_fields || []).find((candidate) => candidate.id === definition.id);
+      if (!field) return null;
+      // A definição da lista traz o type_config completo; o da tarefa pode vir
+      // resumido, então damos preferência ao da lista para resolver as opções.
+      return formatCustomFieldValue({
+        ...field,
+        type: field.type || definition.type,
+        type_config: definition.type_config || field.type_config,
+      });
+    },
   });
 
-  return { colunas: [...standardColumns(), ...customColumns], vistos };
+  const porNome = new Map(customFields.map((definition) => [definition.name, definition]));
+  const usados = new Set();
+  const colunas = [];
+
+  for (const spec of COLUNAS) {
+    if (spec.padrao) {
+      const leitor = LEITORES_PADRAO[spec.padrao];
+      if (!leitor) {
+        throw new Error(
+          `COLUNAS tem a chave padrão "${spec.padrao}", que não existe. ` +
+            `Válidas: ${Object.keys(LEITORES_PADRAO).join(', ')}.`,
+        );
+      }
+      colunas.push({ header: spec.titulo || spec.padrao, ...leitor });
+      continue;
+    }
+
+    // Campo configurado que não existe nesta lista simplesmente não vira coluna.
+    const definition = porNome.get(spec.campo);
+    if (definition) {
+      colunas.push(colunaDeCampo(definition));
+      usados.add(definition.id);
+    }
+  }
+
+  // Campo customizado que existe mas não foi listado entra no fim, em vez de
+  // sumir: um campo novo no ClickUp aparece sem ninguém mexer no código.
+  for (const definition of customFields) {
+    if (!usados.has(definition.id)) colunas.push(colunaDeCampo(definition));
+  }
+
+  return { colunas, vistos };
 }
 
 /**
