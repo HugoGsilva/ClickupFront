@@ -1,28 +1,34 @@
-# Stack para Docker Swarm + Traefik (Portainer > Stacks > Add stack).
+# Stack para Docker Swarm + Traefik (Portainer > Stacks > Add stack > Web editor).
 # Para Docker simples, sem Swarm, use o docker-compose.yml.
 #
-# Variáveis a preencher na aba "Environment variables" do Portainer:
-#   CLICKUP_TOKEN, AUTH_USER, AUTH_PASSWORD
-#   e CLICKUP_LIST_IDS *ou* CLICKUP_FOLDER_ID
+# Preencha na aba "Environment variables" do Portainer:
+#   OBRIGATÓRIAS: CLICKUP_TOKEN, AUTH_USER, AUTH_PASSWORD, DOCKER_IMAGE
+#
+# O escopo (a pasta e os nomes que aparecem) vem fixo em src/listas.js — não
+# precisa de variável. As de escopo abaixo são só para sobrescrever isso.
 version: "3.8"
 
 services:
   clickup-export:
-    image: ${DOCKER_IMAGE:-hugogsilva/clickup-export:latest}
+    image: ${DOCKER_IMAGE:?DOCKER_IMAGE is required}
     environment:
       CLICKUP_TOKEN: "${CLICKUP_TOKEN:?CLICKUP_TOKEN is required}"
 
-      # Escolha UM dos dois. Rode "npm run descobrir" para achar os ids —
-      # o id que aparece na URL da lista é o da view, não o da lista.
-      CLICKUP_LIST_IDS: "${CLICKUP_LIST_IDS:-}"
-      CLICKUP_FOLDER_ID: "${CLICKUP_FOLDER_ID:-}"
+      AUTH_USER: "${AUTH_USER:?AUTH_USER is required}"
+      AUTH_PASSWORD: "${AUTH_PASSWORD:?AUTH_PASSWORD is required}"
 
+      # Escopo — opcionais. Vazias = a pasta e os nomes fixos de src/listas.js.
+      #   CLICKUP_ALL_LISTS=true  -> mostra TODAS as listas da pasta
+      #   CLICKUP_FOLDER_ID=<id>  -> aponta para outra pasta
+      #   CLICKUP_LIST_IDS=a,b,c  -> listas avulsas
+      CLICKUP_ALL_LISTS: "${CLICKUP_ALL_LISTS:-false}"
+      CLICKUP_FOLDER_ID: "${CLICKUP_FOLDER_ID:-}"
+      CLICKUP_LIST_IDS: "${CLICKUP_LIST_IDS:-}"
+
+      # O que entra na exportação.
       CLICKUP_INCLUDE_CLOSED: "${CLICKUP_INCLUDE_CLOSED:-true}"
       CLICKUP_INCLUDE_SUBTASKS: "${CLICKUP_INCLUDE_SUBTASKS:-true}"
       CLICKUP_INCLUDE_ARCHIVED: "${CLICKUP_INCLUDE_ARCHIVED:-false}"
-
-      AUTH_USER: "${AUTH_USER:?AUTH_USER is required}"
-      AUTH_PASSWORD: "${AUTH_PASSWORD:?AUTH_PASSWORD is required}"
 
       # Traefik está na frente, então o app pode confiar no X-Forwarded-For
       # para identificar o cliente no freio de força bruta.
@@ -52,9 +58,8 @@ services:
       resources:
         limits:
           cpus: "1"
-          # Uma lista de 17 mil tarefas chega a ~364 MB de pico durante a
-          # montagem da planilha. 1G dá folga; abaixo disso o container morre
-          # no meio da exportação das listas grandes.
+          # Medido: exportar a pasta inteira (19 listas, ~92 mil tarefas) tem
+          # pico de ~262 MB. 1G dá folga confortável.
           memory: 1G
       labels:
         - traefik.enable=true
