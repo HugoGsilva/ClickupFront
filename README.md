@@ -81,9 +81,8 @@ variables*:
 | `CLICKUP_LIST_IDS` *ou* `CLICKUP_FOLDER_ID` | o escopo (veja *Achar os ids*) |
 | `AUTH_USER` / `AUTH_PASSWORD` | o login da tela |
 
-O limite de memória está em 1 GB: uma lista de 17 mil tarefas chega a ~364 MB de
-pico enquanto monta a planilha, e abaixo disso o container morre no meio da
-exportação.
+O limite de memória está em 1 GB, com folga: exportar a pasta inteira (21
+listas, 89 mil tarefas) tem pico medido de 262 MB.
 
 Para atualizar depois de um push novo: **Stacks > sua stack > Pull and redeploy**.
 
