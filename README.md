@@ -196,10 +196,21 @@ npm run descobrir
 Imprime a árvore do time — espaços, pastas e listas, com os ids que o app usa.
 Precisa só de `CLICKUP_TOKEN` e `CLICKUP_TEAM_ID` no `.env`.
 
-Isso existe porque **o id que aparece na URL de uma lista é o da view, não o da
-lista**. Em `app.clickup.com/9013302815/v/l/8ckr5gz-2173`, o `8ckr5gz-2173` é a
-view (a API rejeita) e o `9013302815` é o time. O id que o app precisa só sai
-pela API — ou por este script.
+### Sobre os ids da URL
+
+Em `app.clickup.com/9013302815/v/l/8ckr5gz-2173`:
+
+| Parte | O que é |
+| --- | --- |
+| `9013302815` | id do workspace — é o `CLICKUP_TEAM_ID` |
+| `8ckr5gz-2173` | id da **view** (a visualização em lista), não da lista |
+
+`GET /list/8ckr5gz-2173` devolve 404, porque view e lista são objetos
+diferentes. Mas dá para chegar na lista a partir dela: **`CLICKUP_LIST_IDS`
+aceita o id da view e o app resolve sozinho**, consultando `GET /view/{id}` e
+seguindo para o `parent`. Ou seja, você pode colar o id direto do link do
+navegador. Se o pai não for uma lista (uma view de pasta, por exemplo), o app
+diz isso explicitamente em vez de falhar sem explicação.
 
 ## Diagnóstico (conferir os campos sem expor dados)
 

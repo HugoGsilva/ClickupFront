@@ -108,6 +108,20 @@ export function startFakeClickUp() {
       return send({ lists: LISTS });
     }
 
+    // Views: a rota /v/l/<id> do ClickUp aponta para uma view, e o app resolve
+    // o pai dela. "8ckr5gz-2173" é uma view de lista; "vw-de-pasta" pendura
+    // numa pasta e não deve virar lista nenhuma.
+    const viewMatch = /^\/view\/([^/]+)$/.exec(url.pathname);
+    if (viewMatch) {
+      if (viewMatch[1] === '8ckr5gz-2173') {
+        return send({ view: { id: viewMatch[1], name: 'Lista', parent: { id: '902', type: 6 } } });
+      }
+      if (viewMatch[1] === 'vw-de-pasta') {
+        return send({ view: { id: viewMatch[1], name: 'Pasta', parent: { id: '555', type: 5 } } });
+      }
+      return send({ err: 'View not found' }, 404);
+    }
+
     const listMatch = /^\/list\/([^/]+)$/.exec(url.pathname);
     if (listMatch) {
       const list = LISTS.find((candidate) => candidate.id === listMatch[1]);

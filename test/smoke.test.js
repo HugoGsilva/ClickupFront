@@ -44,8 +44,9 @@ async function waitForServer(url, attempts = 60) {
 }
 
 const { server: fake, base, requests } = await startFakeClickUp();
-// Também vale para este processo, que importa src/clickup.js direto nos testes da trava.
+// Também valem para este processo, que importa src/clickup.js direto em alguns testes.
 process.env.CLICKUP_API_BASE = base;
+process.env.CLICKUP_TOKEN = 'pk_token_de_teste';
 const port = 3999;
 const appUrl = `http://127.0.0.1:${port}`;
 
@@ -155,6 +156,25 @@ try {
     } finally {
       outro.kill();
     }
+  });
+
+  await test('aceita o id de view que vem na URL do ClickUp', async () => {
+    const { getList } = await import('../src/clickup.js');
+
+    // .../v/l/8ckr5gz-2173 → view → lista 902
+    const daView = await getList('8ckr5gz-2173');
+    assert.equal(daView.id, '902');
+    assert.equal(daView.name, 'ANA CAROLINA');
+
+    // id de lista de verdade continua funcionando direto
+    const direto = await getList('901');
+    assert.equal(direto.name, 'DIVANEIDE');
+  });
+
+  await test('view que não pertence a uma lista dá erro explicativo', async () => {
+    const { getList } = await import('../src/clickup.js');
+    await assert.rejects(() => getList('vw-de-pasta'), /não pertence a uma lista/i);
+    await assert.rejects(() => getList('nao-existe-mesmo'), /não é um id de lista nem de view/i);
   });
 
   console.log('\nExportação');

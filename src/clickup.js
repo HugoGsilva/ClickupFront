@@ -195,10 +195,51 @@ export async function getLists(folderId) {
   return (data.lists || []).map(normalizeList);
 }
 
-/** Uma lista específica, quando o app é configurado por CLICKUP_LIST_IDS. */
+/**
+ * Uma lista específica, quando o app é configurado por CLICKUP_LIST_IDS.
+ *
+ * Aceita também o id que aparece na URL do ClickUp. A rota /v/l/<id> aponta
+ * para a VIEW (a visualização em lista), não para a lista — então, se o id não
+ * for de lista, tentamos resolvê-lo como view e seguimos para o pai dela.
+ * Assim dá para colar o id direto do link do navegador.
+ */
 export async function getList(listId) {
-  const list = await request(`/list/${assertId(listId, 'id da lista')}`);
-  return normalizeList(list);
+  assertId(listId, 'id da lista');
+
+  try {
+    return normalizeList(await request(`/list/${listId}`));
+  } catch (err) {
+    const podeSerView = err instanceof ClickUpError && [400, 404].includes(err.status);
+    if (!podeSerView) throw err;
+
+    let paiId;
+    try {
+      const resposta = await request(`/view/${listId}`);
+      paiId = resposta?.view?.parent?.id;
+    } catch {
+      paiId = null;
+    }
+
+    if (!paiId) {
+      throw new ClickUpError(
+        `"${listId}" não é um id de lista nem de view acessível. Rode "npm run descobrir" para ver os ids disponíveis.`,
+        404,
+      );
+    }
+
+    // Confirma que o pai é mesmo uma lista antes de aceitar (uma view também
+    // pode pendurar em pasta, espaço ou time).
+    try {
+      const lista = normalizeList(await request(`/list/${assertId(paiId, 'id da lista')}`));
+      console.log(`[clickup] "${listId}" era o id de uma view; usando a lista ${lista.id} ("${lista.name}").`);
+      return lista;
+    } catch {
+      throw new ClickUpError(
+        `"${listId}" é uma view que não pertence a uma lista. Use o id da lista — rode "npm run descobrir".`,
+        404,
+      );
+    }
+  }
 }
 
 /**
