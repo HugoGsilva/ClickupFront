@@ -59,7 +59,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * esperam a sua vez numa fila única. Fica um pouco mais lento sob concorrência,
  * e para de falhar.
  */
-const LIMITE_POR_MINUTO = Number(process.env.CLICKUP_REQS_POR_MINUTO ?? 90);
+const LIMITE_POR_MINUTO = (() => {
+  // Number('') é 0, e ?? não protege contra string vazia: um valor inválido
+  // fazia o teto virar zero, nenhuma chamada jamais passar, e o /health
+  // continuar verde — o container ficava vivo e inútil, sem reiniciar.
+  const bruto = Number(process.env.CLICKUP_REQS_POR_MINUTO);
+  if (Number.isFinite(bruto) && bruto > 0) return bruto;
+  if (process.env.CLICKUP_REQS_POR_MINUTO) {
+    console.warn(
+      `CLICKUP_REQS_POR_MINUTO inválido ("${process.env.CLICKUP_REQS_POR_MINUTO}"): usando 90.`,
+    );
+  }
+  return 90;
+})();
 const carimbos = [];
 let fila = Promise.resolve();
 
@@ -321,7 +333,16 @@ function normalizeList(list) {
  */
 export async function getListFields(listId) {
   const data = await request(`/list/${assertId(listId, 'id da lista')}/field`);
-  return data.fields || [];
+  if (!Array.isArray(data.fields)) {
+    // Engolir isto fazia as colunas caírem para descoberta por amostra, e o
+    // erro aparecia depois como "campo apareceu tarde" — apontando para o
+    // lugar errado do problema.
+    throw new ClickUpError(
+      `Resposta inesperada do ClickUp: definições de campo da lista ${listId} vieram sem "fields".`,
+      502,
+    );
+  }
+  return data.fields;
 }
 
 /**
@@ -341,7 +362,25 @@ export async function* iterateTaskPages(listId, { signal, maxPages = MAX_PAGES }
       subtasks: config.includeSubtasks ? 'true' : 'false',
     });
 
-    const batch = data.tasks || [];
+    // Um 200 sem o campo `tasks` (proxy, WAF, página de manutenção) era
+    // indistinguível de "a lista acabou", e a exportação parava no meio
+    // entregando um arquivo truncado. Aqui os dois casos são separados com
+    // precisão, sem depender de contagem.
+    if (!Array.isArray(data.tasks)) {
+      throw new ClickUpError(
+        `Resposta inesperada do ClickUp na página ${page} da lista ${listId}: veio sem a lista de tarefas.`,
+        502,
+      );
+    }
+
+    const batch = data.tasks;
+    if (batch.length === 0 && page > 0 && !data.last_page) {
+      throw new ClickUpError(
+        `Página ${page} da lista ${listId} veio vazia sem sinalizar o fim: a exportação ficaria incompleta.`,
+        502,
+      );
+    }
+
     yield batch;
 
     if (data.last_page || batch.length === 0) break;

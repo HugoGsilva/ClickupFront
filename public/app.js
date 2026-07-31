@@ -18,6 +18,14 @@ let allLists = [];
 const nf = new Intl.NumberFormat('pt-BR');
 
 function showError(message) {
+  els.feedback.className = 'feedback';
+  els.feedback.textContent = message;
+  els.feedback.hidden = !message;
+}
+
+/** Aviso: a planilha foi entregue, mas com uma ressalva que vale conferir. */
+function showAviso(message) {
+  els.feedback.className = 'feedback feedback--aviso';
   els.feedback.textContent = message;
   els.feedback.hidden = !message;
 }
@@ -175,7 +183,7 @@ async function baixar({ url, button, status, bar, totalEsperado, nomeFallback })
     if (!inicio.ok && inicio.status !== 202) throw await erroDe(inicio);
 
     // Passo 2: espera terminar, acompanhando pelo progresso.
-    await new Promise((resolve, reject) => {
+    const aviso = await new Promise((resolve, reject) => {
       const espera = setInterval(async () => {
         try {
           const res = await fetch(`/api/progress/${token}`, { cache: 'no-store' });
@@ -186,7 +194,7 @@ async function baixar({ url, button, status, bar, totalEsperado, nomeFallback })
             reject(new Error(progresso.error));
           } else if (progresso.done) {
             clearInterval(espera);
-            resolve();
+            resolve(progresso.aviso || null);
           }
         } catch {
           /* erro de rede no polling: tenta de novo no próximo tique */
@@ -203,6 +211,7 @@ async function baixar({ url, button, status, bar, totalEsperado, nomeFallback })
 
     bar.style.width = '100%';
     status.textContent = 'baixado ✓';
+    if (aviso) showAviso(`${nomeFallback.replace(/\.xlsx$/, '')}: ${aviso}`);
     setTimeout(() => {
       bar.style.width = '0';
       status.textContent = '';

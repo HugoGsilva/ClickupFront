@@ -238,6 +238,12 @@ h1 {
   font-size: 14px;
 }
 
+.feedback--aviso {
+  background: #fff8e6;
+  border-color: #f2d98c;
+  color: #8a6100;
+}
+
 .empty {
   padding: 26px 16px;
   text-align: center;

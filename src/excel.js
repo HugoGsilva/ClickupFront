@@ -178,13 +178,19 @@ function customFieldFormat(field) {
  */
 function collectCustomFields(fieldDefinitions, tasks) {
   const fields = new Map();
+  const vistos = new Set();
 
   for (const definition of fieldDefinitions || []) {
-    if (definition?.id) fields.set(definition.id, definition);
+    if (definition?.id) {
+      fields.set(definition.id, definition);
+      vistos.add(definition.id);
+    }
   }
   for (const task of tasks) {
     for (const field of task.custom_fields || []) {
-      if (field?.id && !fields.has(field.id)) fields.set(field.id, field);
+      if (!field?.id) continue;
+      vistos.add(field.id);
+      if (!fields.has(field.id)) fields.set(field.id, field);
     }
   }
 
@@ -204,7 +210,13 @@ function collectCustomFields(fieldDefinitions, tasks) {
     return indice === -1 ? ORDEM_DOS_CAMPOS.length : indice;
   };
 
-  return encontrados.sort((a, b) => posicao(a) - posicao(b));
+  encontrados.sort((a, b) => posicao(a) - posicao(b));
+
+  // `vistos` inclui o que foi deixado de fora de propósito (button e
+  // CAMPOS_OCULTOS). Sem essa separação, esconder um campo o tornava
+  // "desconhecido" e a trava de campo tardio abortava toda exportação em que
+  // ele tivesse valor — ou seja, a funcionalidade nascia quebrada.
+  return { colunas: encontrados, vistos };
 }
 
 /**
@@ -254,7 +266,7 @@ function sanitizeSheetName(name, usados) {
  * essa amostra — na prática o conjunto de campos é o mesmo na lista inteira.
  */
 function buildColumns(fieldDefinitions = [], amostra = []) {
-  const customFields = collectCustomFields(fieldDefinitions, amostra);
+  const { colunas: customFields, vistos } = collectCustomFields(fieldDefinitions, amostra);
 
   const customColumns = customFields.map((definition) => {
     return {
@@ -276,7 +288,7 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
     };
   });
 
-  return [...standardColumns(), ...customColumns];
+  return { colunas: [...standardColumns(), ...customColumns], vistos };
 }
 
 /**
@@ -309,7 +321,7 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
     const primeira = await iterator.next();
     const primeiraPagina = primeira.done ? [] : primeira.value;
 
-    const columns = buildColumns(fieldDefinitions, primeiraPagina);
+    const { colunas: columns, vistos } = buildColumns(fieldDefinitions, primeiraPagina);
     const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name, nomesUsados), {
       views: [{ state: 'frozen', ySplit: 1 }],
     });
@@ -334,7 +346,7 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
     };
 
     let total = 0;
-    const conhecidos = new Set(columns.map((coluna) => coluna.fieldId).filter(Boolean));
+    const conhecidos = vistos;
 
     const escrever = (pagina) => {
       for (const task of pagina) {

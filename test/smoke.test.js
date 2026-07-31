@@ -259,7 +259,18 @@ try {
               { id: 'b', name: 'Cidade', type: 'short_text', type_config: {} },
             ],
             pages: (async function* () {
-              yield [{ id: 't1', name: 'x', custom_fields: [{ id: 'b', type: 'short_text', value: 'Goiânia' }] }];
+              // O campo oculto PRECISA ter valor: era isso que faltava no teste
+              // anterior, e por isso ele não pegou a exportação quebrando.
+              yield [
+                {
+                  id: 't1',
+                  name: 'x',
+                  custom_fields: [
+                    { id: 'a', type: 'short_text', value: '123.456.789-00' },
+                    { id: 'b', type: 'short_text', value: 'Goiânia' },
+                  ],
+                },
+              ];
             })(),
           },
         ],
@@ -476,6 +487,39 @@ try {
       if (progresso.error) erro = progresso.error;
     }
     assert.match(erro || '', /incompleta/i, 'o erro tem que chegar pelo progresso');
+  });
+
+  await test('segundo cliente na mesma exportação também recebe progresso', async () => {
+    const tokenA = 'dois-clientes-A';
+    const tokenB = 'dois-clientes-B';
+
+    // A dispara; B entra no meio da MESMA geração (mesma lista, cache limpo).
+    const a = fetch(`${appUrl}/api/lists/904/export.xlsx?p=${tokenA}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    await sleep(80);
+    const b = fetch(`${appUrl}/api/lists/904/export.xlsx?p=${tokenB}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    await Promise.all([a, b]);
+
+    // Os dois têm que sair do "gerando", com sucesso ou com erro — nunca ficar
+    // presos. O que travava a tela era B nunca receber nada.
+    const estado = async (t) => {
+      for (let i = 0; i < 60; i++) {
+        const res = await fetch(`${appUrl}/api/progress/${t}`, {
+          headers: { Authorization: credentials },
+        });
+        const p = await res.json();
+        if (p.done || p.error) return p;
+        await sleep(200);
+      }
+      return null;
+    };
+
+    const [pa, pb] = await Promise.all([estado(tokenA), estado(tokenB)]);
+    assert.ok(pa, 'o primeiro cliente ficou preso');
+    assert.ok(pb, 'o segundo cliente ficou preso — ele não recebia progresso nenhum');
   });
 
   await test('o progresso é reportado durante a exportação', async () => {

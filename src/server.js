@@ -44,11 +44,31 @@ app.use((req, res, next) => {
 let folderCache = null; // { at, data }
 const exportCache = new Map(); // chave -> { at, filePath, fileName, taskCount }
 const progressByToken = new Map(); // token -> { fetched, total, done, error, at }
-const emAndamento = new Map(); // chave -> Promise, para dois cliques não gerarem duas vezes
+const emAndamento = new Map(); // chave -> { promessa, tokens } — dois cliques, uma geração
 
 const MAX_EXPORT_CACHE = 5;
 const PROGRESS_TTL_MS = 15 * 60 * 1000;
 const MAX_PROGRESS = 500;
+// Sem isto, o modo assíncrono deixava um cliente disparar uma geração por lista
+// em menos de um segundo: 20 arquivos com CPF em disco ao mesmo tempo e o pico
+// de memória subindo de 262 MB para 456 MB.
+const MAX_GERACOES = Number(process.env.MAX_EXPORTS_SIMULTANEOS) > 0
+  ? Number(process.env.MAX_EXPORTS_SIMULTANEOS)
+  : 3;
+let geracoesAtivas = 0;
+const esperandoVaga = [];
+
+async function pegarVaga() {
+  if (geracoesAtivas >= MAX_GERACOES) {
+    await new Promise((resolve) => esperandoVaga.push(resolve));
+  }
+  geracoesAtivas++;
+}
+
+function devolverVaga() {
+  geracoesAtivas--;
+  esperandoVaga.shift()?.();
+}
 
 // Os arquivos são montados em disco, não em memória. Uma pasta com 87 mil
 // tarefas passaria de 1,9 GB de pico se fosse acumulada antes de escrever.
@@ -125,6 +145,13 @@ function rememberExport(chave, entry) {
 
 let ultimaLimpeza = 0;
 
+/** Manda o mesmo progresso para todos os clientes que esperam esta geração. */
+function avisarTodos(chave, tokenPrincipal, patch) {
+  const alvos = new Set(emAndamento.get(chave)?.tokens || []);
+  if (tokenPrincipal) alvos.add(tokenPrincipal);
+  for (const alvo of alvos) setProgress(alvo, patch);
+}
+
 function setProgress(token, patch) {
   if (!token) return;
   const now = Date.now();
@@ -138,8 +165,16 @@ function setProgress(token, patch) {
       if (now - value.at > PROGRESS_TTL_MS) progressByToken.delete(key);
     }
   }
+  // Descarta o mais antigo JÁ CONCLUÍDO. Descartar a primeira chave inserida
+  // removia justamente o token da exportação em curso — a mais antiga é sempre
+  // a que está rodando há mais tempo — e a tela do usuário girava para sempre.
   while (progressByToken.size >= MAX_PROGRESS && !progressByToken.has(token)) {
-    progressByToken.delete(progressByToken.keys().next().value);
+    let vitima = null;
+    for (const [chave, valor] of progressByToken) {
+      if (valor.done && (!vitima || valor.at < vitima.at)) vitima = { chave, at: valor.at };
+    }
+    if (!vitima) vitima = { chave: progressByToken.keys().next().value };
+    progressByToken.delete(vitima.chave);
   }
 
   progressByToken.set(token, { ...(progressByToken.get(token) || {}), ...patch, at: now });
@@ -191,13 +226,23 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
       total: cached.taskCount,
       done: true,
       cached: true,
+      aviso: cached.aviso || null,
     });
     return cached;
   }
 
-  if (emAndamento.has(chave)) return emAndamento.get(chave);
+  // Quem chega no meio de uma geração em andamento entra na lista de quem
+  // recebe o progresso. Sem isto, o segundo cliente esperava um token que nunca
+  // era atualizado: a tela ficava girando para sempre, mesmo com o arquivo
+  // pronto. Bastava recarregar a página e clicar de novo para cair nisso.
+  const emCurso = emAndamento.get(chave);
+  if (emCurso) {
+    if (token) emCurso.tokens.add(token);
+    return emCurso.promessa;
+  }
 
   const trabalho = (async () => {
+    await pegarVaga();
     const filePath = path.join(TEMP_DIR, `${randomUUID()}.xlsx`);
     // Cria já com 0600: o arquivo vai conter CPF e valores em claro, e o
     // exceljs preserva a permissão do arquivo existente ao escrever nele.
@@ -205,7 +250,7 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
     const totalPrevisto = lists.reduce((soma, list) => soma + (list.taskCount || 0), 0);
     let jaEscritas = 0;
 
-    setProgress(token, {
+    avisarTodos(chave, token, {
       fetched: 0,
       total: totalPrevisto || null,
       listas: lists.length,
@@ -224,7 +269,7 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
         // tarefa 101 sumiriam da planilha sem aviso.
         fieldDefinitions: await getListFields(list.id),
         pages: (async function* () {
-          setProgress(token, { listaAtual: list.name, indice: indice + 1 });
+          avisarTodos(chave, token, { listaAtual: list.name, indice: indice + 1 });
           for await (const pagina of iterateTaskPages(list.id)) {
             yield pagina;
           }
@@ -245,7 +290,7 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
           porAba.set(list?.id || list?.name, total);
           let soma = 0;
           for (const parcial of porAba.values()) soma += parcial;
-          setProgress(token, { fetched: soma });
+          avisarTodos(chave, token, { fetched: soma });
         },
       });
     } catch (err) {
@@ -257,28 +302,26 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
 
     jaEscritas = resumo.reduce((soma, aba) => soma + aba.tasks, 0);
 
-    // Uma resposta 200 do ClickUp sem o campo `tasks` é indistinguível de "a
-    // lista acabou": a exportação parava no meio e entregava um .xlsx válido,
-    // com 200, cache de 5 minutos e barra em 100% — só que faltando tarefas.
-    // Planilha de precatório truncada em silêncio é pior do que exportação
-    // nenhuma, então aqui ela falha alto.
-    //
-    // O task_count do ClickUp não conta subtarefas, então o escrito deve ficar
-    // IGUAL OU ACIMA do previsto; abaixo é sinal de que faltou página.
-    if (config.verificarContagem && totalPrevisto && jaEscritas < totalPrevisto) {
-      await fsp.unlink(filePath).catch(() => {});
-      throw new ClickUpError(
-        `Exportação incompleta: o ClickUp informa ${totalPrevisto} tarefas e só ${jaEscritas} foram lidas. ` +
-          'Nenhum arquivo foi entregue para evitar planilha faltando dados. Tente de novo.',
-        502,
-      );
+    // Divergência de contagem é AVISO, não recusa. A falha que motivava isto
+    // (página vazia / resposta sem `tasks`) agora é detectada na origem, em
+    // iterateTaskPages. Recusar por contagem quebrava exportação legítima:
+    // basta uma tarefa apagada durante os ~13 minutos, ou o task_count do
+    // ClickUp estar desatualizado, e o usuário ficava sem planilha nenhuma —
+    // com a mensagem mandando "tente de novo", que falharia igual, gastando
+    // ~950 requisições do orçamento a cada tentativa.
+    let aviso = null;
+    if (totalPrevisto && jaEscritas < totalPrevisto) {
+      aviso =
+        `O ClickUp informa ${totalPrevisto} tarefas e vieram ${jaEscritas}. ` +
+        'A planilha foi gerada assim mesmo — confira se falta algo.';
+      console.warn(`[export] ${nomeArquivo}: ${aviso}`);
     }
 
     const { size } = await fsp.stat(filePath);
-    const entry = { at: Date.now(), filePath, fileName: nomeArquivo, taskCount: jaEscritas, size };
+    const entry = { at: Date.now(), filePath, fileName: nomeArquivo, taskCount: jaEscritas, size, aviso };
     rememberExport(chave, entry);
 
-    setProgress(token, { done: true, fetched: jaEscritas, taskCount: jaEscritas });
+    avisarTodos(chave, token, { done: true, fetched: jaEscritas, taskCount: jaEscritas, aviso });
     console.log(
       `[export] ${nomeArquivo}: ${resumo.length} aba(s), ${jaEscritas} tarefas, ${(size / 1048576).toFixed(1)} MB`,
     );
@@ -286,10 +329,15 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
     return entry;
   })();
 
-  emAndamento.set(chave, trabalho);
+  emAndamento.set(chave, { promessa: trabalho, tokens: new Set(token ? [token] : []) });
   try {
     return await trabalho;
+  } catch (err) {
+    // Quem estava esperando esta geração precisa ver o erro, não girar.
+    avisarTodos(chave, token, { done: true, error: err.message });
+    throw err;
   } finally {
+    devolverVaga();
     emAndamento.delete(chave);
   }
 }
@@ -305,7 +353,9 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
  * por mais que alguns segundos.
  */
 function despachar(res, token, gerar) {
-  if (res.req.query.async === '1') {
+  const pedido = res.req.query.async;
+  const querAsync = Array.isArray(pedido) ? pedido.includes('1') : pedido === '1';
+  if (querAsync) {
     gerar().catch((err) => {
       setProgress(token, { done: true, error: err.message });
       console.error(`[export] falhou em segundo plano: ${err.message}`);
@@ -401,9 +451,11 @@ async function sendWorkbook(res, { filePath, fileName, size }) {
     if (err?.code !== 'ERR_STREAM_PREMATURE_CLOSE' && !res.writableEnded) {
       console.error(`[erro] falha ao enviar ${filePath}: ${err.message}`);
     }
-    stream.destroy();
-    if (!res.headersSent) res.status(500).json({ error: 'Falha ao enviar o arquivo.' });
-    else res.destroy();
+    // pipeline() já destruiu os dois lados: headersSent continua false, mas o
+    // socket morreu. Tentar responder JSON aqui não chega a lugar nenhum.
+    if (!res.headersSent && !res.destroyed) {
+      res.status(500).json({ error: 'Falha ao enviar o arquivo.' });
+    }
   }
 }
 
@@ -446,8 +498,25 @@ const servidor = app.listen(config.port, () => {
 // Node sai na hora e derruba downloads em andamento no meio.
 for (const sinal of ['SIGTERM', 'SIGINT']) {
   process.on(sinal, () => {
-    console.log(`${sinal} recebido: parando de aceitar conexões e terminando as em curso.`);
-    servidor.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 30_000).unref();
+    console.log(`${sinal} recebido: parando de aceitar conexões.`);
+    servidor.close();
+
+    // No modo assíncrono não existe conexão HTTP aberta durante a geração —
+    // é essa a razão de ser do modo. Então servidor.close() sozinho saía em
+    // 10 ms e descartava uma exportação de 13 minutos em silêncio, com código
+    // 0. Aqui esperamos as gerações em curso, com teto.
+    const pendentes = () => emAndamento.size;
+    const limite = Date.now() + 60_000;
+    const conferir = setInterval(() => {
+      if (pendentes() === 0) {
+        console.log('nenhuma exportação em curso: encerrando.');
+        process.exit(0);
+      }
+      if (Date.now() > limite) {
+        console.warn(`encerrando com ${pendentes()} exportação(ões) em curso perdida(s).`);
+        process.exit(1);
+      }
+    }, 250);
+    conferir.unref();
   });
 }
