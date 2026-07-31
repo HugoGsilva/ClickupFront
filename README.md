@@ -112,21 +112,29 @@ para o Docker conseguir monitorar o container.
 
 ## O que sai na planilha
 
-Uma aba, uma linha por tarefa. Colunas, nesta ordem:
+Uma aba por lista, uma linha por tarefa, **20 colunas**:
 
-1. **Padrão** — ID, ID customizado (quando existe), Nome, Status, Prioridade,
-   Responsáveis, Tags, Criada em, Atualizada em, Início, Prazo, Concluída em,
-   Tempo estimado (h), Tempo gasto (h), Lista, Tarefa pai, Criada por.
-2. **Todos os campos customizados da lista**, na ordem definida no ClickUp.
-3. Descrição e Link.
+1. `Nome da tarefa`
+2. Os **19 campos customizados**, na ordem definida em `src/listas.js`
+   (`ORDEM_DOS_CAMPOS`) — do `03 - CPF` ao `Previdenciário?`.
+
+Campo customizado vira coluna **mesmo quando está vazio em todas as tarefas** —
+a planilha reflete a estrutura da lista, não só o que foi preenchido. Campo do
+tipo `button` fica de fora: é ação de interface, não dado.
+
+As demais colunas do ClickUp (ID, Status, Prioridade, Responsáveis, Tags, datas,
+tempos, Descrição, Link) **não são exportadas** — por decisão de escopo, já que
+vinham vazias nesta operação. Para trazer alguma de volta, é uma linha em
+`standardColumns()` (`src/excel.js`), com o exemplo pronto no comentário.
+
+Um campo customizado que exista nas tarefas mas não esteja em `ORDEM_DOS_CAMPOS`
+não é descartado: entra no fim. Assim um campo novo criado no ClickUp aparece na
+planilha sem ninguém precisar lembrar de atualizar o código.
 
 Os valores vêm convertidos, não crus: `drop_down` mostra o nome da opção (e não
 o id), `labels` vira a lista de etiquetas separada por vírgula, `checkbox` vira
 Sim/Não, datas viram data de verdade (dá para ordenar e filtrar), moeda e número
 viram número (dá para somar). Cabeçalho congelado e autofiltro já vêm ligados.
-
-Um campo customizado que apareça nas tarefas mas não na definição da lista
-(herdado de outro nível) também vira coluna, no fim do bloco de customizados.
 
 ## Somente leitura
 

@@ -204,10 +204,14 @@ try {
     assert.equal(sheet.rowCount, 4); // cabeçalho + 3 tarefas
   });
 
-  await test('traz as colunas padrão', () => {
+  await test('traz só o nome da tarefa como coluna padrão', () => {
     const headers = sheet.getRow(1).values.slice(1);
-    for (const expected of ['ID', 'Nome', 'Status', 'Prioridade', 'Responsáveis', 'Prazo', 'Link']) {
-      assert.ok(headers.includes(expected), `faltou a coluna "${expected}" em ${headers.join(', ')}`);
+    assert.equal(headers[0], 'Nome da tarefa');
+
+    // Colunas do ClickUp que ficaram de fora de propósito: a planilha é sobre
+    // os campos customizados.
+    for (const fora of ['ID', 'Status', 'Prioridade', 'Responsáveis', 'Prazo', 'Descrição', 'Link']) {
+      assert.ok(!headers.includes(fora), `"${fora}" não deveria estar na planilha`);
     }
   });
 
@@ -226,6 +230,21 @@ try {
     }
   });
 
+  await test('respeita a ordem de colunas definida em listas.js', async () => {
+    const { ORDEM_DOS_CAMPOS } = await import('../src/listas.js');
+    const headers = sheet.getRow(1).values.slice(1);
+
+    // Só os campos que estão na ordem configurada, na sequência em que aparecem.
+    const configurados = headers.filter((h) => ORDEM_DOS_CAMPOS.includes(h));
+    const esperados = ORDEM_DOS_CAMPOS.filter((nome) => headers.includes(nome));
+    assert.deepEqual(configurados, esperados);
+  });
+
+  await test('campo do tipo button não vira coluna', () => {
+    const headers = sheet.getRow(1).values.slice(1);
+    assert.ok(!headers.includes('Botão de ação'), 'campo button não deveria virar coluna');
+  });
+
   await test('converte os valores dos campos customizados', () => {
     const headers = sheet.getRow(1).values.slice(1);
     const at = (name, row) => sheet.getRow(row).getCell(headers.indexOf(name) + 1).value;
@@ -239,18 +258,7 @@ try {
     assert.equal(at('Etiquetas', 2), 'Urgente, Revisar');
     assert.ok(at('Data da audiência', 2) instanceof Date, 'data deveria virar data de verdade');
     assert.equal(at('Campo herdado', 2), 'valor solto');
-  });
-
-  await test('converte os campos padrão', () => {
-    const headers = sheet.getRow(1).values.slice(1);
-    const at = (name, row) => sheet.getRow(row).getCell(headers.indexOf(name) + 1).value;
-
-    assert.equal(at('Status', 2), 'concluído');
-    assert.equal(at('Prioridade', 2), 'Urgente');
-    assert.equal(at('Responsáveis', 2), 'Hugo Silva');
-    assert.equal(at('ID customizado', 2), 'PREC-1');
-    assert.equal(at('Tempo estimado (h)', 2), 1);
-    assert.ok(at('Criada em', 2) instanceof Date);
+    assert.equal(at('Nome da tarefa', 2), 'Tarefa 0 — DIVANEIDE');
   });
 
   await test('cabeçalho congelado e autofiltro ativos', () => {
@@ -296,6 +304,7 @@ try {
 
     // Os campos customizados também vêm nas abas do arquivo completo.
     const headers = tudo.worksheets[1].getRow(1).values.slice(1);
+    assert.equal(headers[0], 'Nome da tarefa');
     for (const esperado of ['CPF', 'Valor do Precatório', 'Fase', 'Etiquetas']) {
       assert.ok(headers.includes(esperado), `faltou "${esperado}" na aba da pasta inteira`);
     }

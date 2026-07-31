@@ -35,3 +35,34 @@ export const LISTAS_PADRAO = [
 ];
 
 export const IDS_PADRAO = LISTAS_PADRAO.map((lista) => lista.id);
+
+/**
+ * Ordem das colunas de campo customizado na planilha.
+ *
+ * É a ordem que aparece no ClickUp: primeiro os campos da própria lista, depois
+ * os herdados. Campo customizado que não esteja aqui não é descartado — entra no
+ * fim, para nenhuma informação sumir sem aviso.
+ *
+ * Para reordenar as colunas, basta mudar a ordem desta lista.
+ */
+export const ORDEM_DOS_CAMPOS = [
+  '03 - CPF',
+  '02 - Telefone',
+  '04 - NrProcesso',
+  '01 - Ação',
+  '05 - Cidade',
+  '06 - UF',
+  '07 - Valor Bruto',
+  '08 - Valor Liquido',
+  '09 - Valor Proposta',
+  '10 - Valor Fechado',
+  '11 - Fundo',
+  '12 - Honorários destacados?',
+  '13 - Data de Encerramento',
+  '14 - Intermediação',
+  '15 - Comissão',
+  'Juridíco',
+  '16 - Data de Expedição',
+  'Ação Coletiva?',
+  'Previdenciário?',
+];

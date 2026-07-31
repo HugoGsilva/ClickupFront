@@ -40,6 +40,8 @@ export const FIELDS = [
     type: 'labels',
     type_config: { options: [{ id: OPTION_A, label: 'Urgente' }, { id: OPTION_B, label: 'Revisar' }] },
   },
+  // Botão da interface: não carrega dado e não deve virar coluna.
+  { id: 'f-botao', name: 'Botão de ação', type: 'button', type_config: {} },
   // Campo que só aparece nas tarefas, não na definição da lista.
   // Serve para provar que ele mesmo assim vira coluna.
 ];

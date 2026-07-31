@@ -1,13 +1,7 @@
 import ExcelJS from 'exceljs';
+import { ORDEM_DOS_CAMPOS } from './listas.js';
 
 const MAX_CELL_LENGTH = 32_000; // limite do Excel é 32.767 caracteres por célula
-
-const PRIORITIES = {
-  urgent: 'Urgente',
-  high: 'Alta',
-  normal: 'Normal',
-  low: 'Baixa',
-};
 
 const CURRENCY_SYMBOLS = {
   BRL: 'R$',
@@ -34,12 +28,6 @@ function toExcelDate(raw) {
   const date = new Date(ms);
   if (Number.isNaN(date.getTime())) return null;
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-}
-
-function msToHours(raw) {
-  const ms = Number(raw);
-  if (!Number.isFinite(ms) || ms <= 0) return null;
-  return Math.round((ms / 3_600_000) * 100) / 100;
 }
 
 function truncate(text) {
@@ -190,40 +178,33 @@ function collectCustomFields(fieldDefinitions, tasks) {
     }
   }
 
-  return [...fields.values()];
+  // Botão é ação da interface, não dado: não vira coluna.
+  const encontrados = [...fields.values()].filter((definition) => definition.type !== 'button');
+
+  // Ordem definida em src/listas.js. Quem não está lá vai para o fim, em vez de
+  // sumir — assim um campo novo no ClickUp aparece na planilha sem ninguém
+  // precisar lembrar de atualizar a lista.
+  const posicao = (definition) => {
+    const indice = ORDEM_DOS_CAMPOS.indexOf(definition.name);
+    return indice === -1 ? ORDEM_DOS_CAMPOS.length : indice;
+  };
+
+  return encontrados.sort((a, b) => posicao(a) - posicao(b));
 }
 
-function standardColumns(tasks) {
-  const hasCustomId = tasks.some((task) => task.custom_id);
-
-  const columns = [
-    { header: 'ID', width: 14, get: (task) => task.id },
-    ...(hasCustomId ? [{ header: 'ID customizado', width: 16, get: (task) => task.custom_id || '' }] : []),
-    { header: 'Nome', width: 45, get: (task) => truncate(task.name || '') },
-    { header: 'Status', width: 18, get: (task) => task.status?.status || '' },
-    { header: 'Prioridade', width: 12, get: (task) => PRIORITIES[task.priority?.priority] || task.priority?.priority || '' },
-    { header: 'Responsáveis', width: 24, get: (task) => names(task.assignees, 'username', 'email') },
-    { header: 'Tags', width: 20, get: (task) => names(task.tags, 'name') },
-    { header: 'Criada em', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_created) },
-    { header: 'Atualizada em', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_updated) },
-    { header: 'Início', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.start_date) },
-    { header: 'Prazo', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.due_date) },
-    { header: 'Concluída em', width: 18, format: FORMATS.datetime, get: (task) => toExcelDate(task.date_closed) },
-    { header: 'Tempo estimado (h)', width: 16, format: FORMATS.number, get: (task) => msToHours(task.time_estimate) },
-    { header: 'Tempo gasto (h)', width: 16, format: FORMATS.number, get: (task) => msToHours(task.time_spent) },
-    { header: 'Lista', width: 22, get: (task) => task.list?.name || '' },
-    { header: 'Tarefa pai', width: 14, get: (task) => task.parent || '' },
-    { header: 'Criada por', width: 20, get: (task) => task.creator?.username || task.creator?.email || '' },
-  ];
-
-  return columns;
-}
-
-function trailingColumns() {
-  return [
-    { header: 'Descrição', width: 50, get: (task) => truncate(task.text_content || task.description || '') },
-    { header: 'Link', width: 32, get: (task) => task.url || '' },
-  ];
+/**
+ * Colunas padrão da tarefa.
+ *
+ * Só o nome, por decisão de escopo: a planilha é sobre os campos customizados
+ * (CPF, processo, valores, fase), e as demais colunas do ClickUp — prioridade,
+ * prazo, tempos, responsáveis — vinham vazias nesta operação. Para trazer
+ * alguma de volta, é só acrescentar aqui:
+ *
+ *   { header: 'Status', width: 18, get: (task) => task.status?.status || '' },
+ *   { header: 'Link',   width: 32, get: (task) => task.url || '' },
+ */
+function standardColumns() {
+  return [{ header: 'Nome da tarefa', width: 45, get: (task) => truncate(task.name || '') }];
 }
 
 /**
@@ -279,7 +260,7 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
     };
   });
 
-  return [...standardColumns(amostra), ...customColumns, ...trailingColumns()];
+  return [...standardColumns(), ...customColumns];
 }
 
 /**
