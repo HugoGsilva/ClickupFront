@@ -66,6 +66,7 @@ const child = spawn(process.execPath, ['src/server.js'], {
     AUTH_MAX_FAILURES: '5',
     AUTH_BLOCK_SECONDS: '2',
     AUTH_FAILURE_DELAY_MS: '0',
+    UNLINK_DELAY_MS: '50',
     TZ: 'America/Sao_Paulo',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -335,6 +336,53 @@ try {
       wb.worksheets.map((sheet) => sheet.name),
       ['ANA', 'ANA (2)', 'ANA (3)'],
     );
+  });
+
+  await test('regerar a mesma lista não acumula arquivos no disco', async () => {
+    const { readdir } = await import('node:fs/promises');
+
+    // Instância própria: cache desligado (para cada chamada regerar de verdade)
+    // e TMPDIR isolado, porque o servidor limpa o diretório temporário ao subir
+    // e apagaria os arquivos em cache da instância principal.
+    const tmpIsolado = await mkdtemp(path.join(tmpdir(), 'clickup-tmpdir-'));
+    const outraPorta = 3996;
+    const outro = spawn(process.execPath, ['src/server.js'], {
+      cwd: path.join(import.meta.dirname, '..'),
+      env: {
+        ...process.env,
+        CLICKUP_API_BASE: base,
+        CLICKUP_TOKEN: 'pk_token_de_teste',
+        CLICKUP_FOLDER_ID: '123',
+        AUTH_USER: USER,
+        AUTH_PASSWORD: PASSWORD,
+        PORT: String(outraPorta),
+        EXPORT_CACHE_SECONDS: '0',
+        UNLINK_DELAY_MS: '50',
+        TMPDIR: tmpIsolado,
+      },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    try {
+      await waitForServer(`http://127.0.0.1:${outraPorta}/health`);
+
+      for (let i = 0; i < 4; i++) {
+        const res = await fetch(`http://127.0.0.1:${outraPorta}/api/lists/901/export.xlsx`, {
+          headers: { Authorization: credentials },
+        });
+        assert.equal(res.status, 200);
+        await res.arrayBuffer();
+      }
+
+      await sleep(500); // UNLINK_DELAY_MS=50
+      const arquivos = await readdir(path.join(tmpIsolado, 'clickup-export'));
+      assert.ok(
+        arquivos.length <= 2,
+        `4 exportações da mesma lista deixaram ${arquivos.length} arquivos — vazamento de temporários`,
+      );
+    } finally {
+      outro.kill();
+    }
   });
 
   await test('o progresso é reportado durante a exportação', async () => {

@@ -118,7 +118,12 @@ export function safeFetch(url, options = {}) {
 
   // As chaves literais vêm DEPOIS do spread de propósito: mesmo que options
   // traga um method, ele é sobrescrito aqui. É a última linha de defesa.
-  return fetch(target, { ...options, method: 'GET', body: undefined });
+  //
+  // redirect:'error' fecha o único furo da invariante: no modo padrão o fetch
+  // segue redirects sozinho, e o destino do segundo salto nunca passaria pelas
+  // validações acima. A API do ClickUp não redireciona; se um dia redirecionar,
+  // é melhor falhar alto do que sair chamando um endereço não validado.
+  return fetch(target, { ...options, method: 'GET', body: undefined, redirect: 'error' });
 }
 
 /**

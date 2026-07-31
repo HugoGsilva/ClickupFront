@@ -47,12 +47,15 @@ const emAndamento = new Map(); // chave -> Promise, para dois cliques não gerar
 
 const MAX_EXPORT_CACHE = 5;
 const PROGRESS_TTL_MS = 15 * 60 * 1000;
+const MAX_PROGRESS = 500;
 
 // Os arquivos são montados em disco, não em memória. Uma pasta com 87 mil
 // tarefas passaria de 1,9 GB de pico se fosse acumulada antes de escrever.
 const TEMP_DIR = path.join(os.tmpdir(), 'clickup-export');
 fs.rmSync(TEMP_DIR, { recursive: true, force: true });
-fs.mkdirSync(TEMP_DIR, { recursive: true });
+// 0700: os arquivos aqui têm CPF e valores em claro. O padrão do sistema
+// (0755/0644) deixaria qualquer processo do container ler.
+fs.mkdirSync(TEMP_DIR, { recursive: true, mode: 0o700 });
 
 /**
  * O catálogo do que o app mostra: a pasta inteira, ou só as listas configuradas
@@ -96,24 +99,48 @@ async function loadCatalog({ force = false } = {}) {
   return catalog;
 }
 
+// Um minuto de folga: alguém pode estar baixando este arquivo agora. Só os
+// testes reduzem isso, para conseguir verificar a limpeza sem esperar.
+const ATRASO_REMOCAO_MS = Number(process.env.UNLINK_DELAY_MS ?? 60_000);
+
+function apagarDepois(filePath) {
+  setTimeout(() => fsp.unlink(filePath).catch(() => {}), ATRASO_REMOCAO_MS).unref();
+}
+
 function rememberExport(chave, entry) {
+  // Regerar a MESMA lista sobrescrevia a entrada e abandonava o arquivo antigo
+  // no disco: o laço de despejo abaixo nunca dispara, porque o tamanho do Map
+  // não cresce. Cada nova exportação vazava um arquivo com CPF e valores.
+  const anterior = exportCache.get(chave);
+  if (anterior && anterior.filePath !== entry.filePath) apagarDepois(anterior.filePath);
+
   exportCache.set(chave, entry);
   while (exportCache.size > MAX_EXPORT_CACHE) {
     const [maisAntiga, valor] = [...exportCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     exportCache.delete(maisAntiga);
-
-    // Apagar na hora cortaria um download em andamento no meio: alguém pode
-    // estar baixando este arquivo agora. Um minuto é folga de sobra.
-    setTimeout(() => fsp.unlink(valor.filePath).catch(() => {}), 60_000).unref();
+    apagarDepois(valor.filePath);
   }
 }
+
+let ultimaLimpeza = 0;
 
 function setProgress(token, patch) {
   if (!token) return;
   const now = Date.now();
-  for (const [key, value] of progressByToken) {
-    if (now - value.at > PROGRESS_TTL_MS) progressByToken.delete(key);
+
+  // O token vem do cliente, então o Map é alimentado por quem chama. Varrer
+  // tudo a cada chamada era O(n) por requisição; agora limpa no máximo uma vez
+  // por minuto, e um teto impede que o Map cresça sem limite.
+  if (now - ultimaLimpeza > 60_000) {
+    ultimaLimpeza = now;
+    for (const [key, value] of progressByToken) {
+      if (now - value.at > PROGRESS_TTL_MS) progressByToken.delete(key);
+    }
   }
+  while (progressByToken.size >= MAX_PROGRESS && !progressByToken.has(token)) {
+    progressByToken.delete(progressByToken.keys().next().value);
+  }
+
   progressByToken.set(token, { ...(progressByToken.get(token) || {}), ...patch, at: now });
 }
 
@@ -171,6 +198,9 @@ async function gerarExport({ chave, nomeArquivo, lists, token }) {
 
   const trabalho = (async () => {
     const filePath = path.join(TEMP_DIR, `${randomUUID()}.xlsx`);
+    // Cria já com 0600: o arquivo vai conter CPF e valores em claro, e o
+    // exceljs preserva a permissão do arquivo existente ao escrever nele.
+    await fsp.writeFile(filePath, '', { mode: 0o600 });
     const totalPrevisto = lists.reduce((soma, list) => soma + (list.taskCount || 0), 0);
     let jaEscritas = 0;
 
@@ -263,7 +293,7 @@ app.get('/api/lists/:listId/export.xlsx', async (req, res, next) => {
       lists: [list],
       token,
     });
-    return sendWorkbook(res, entry);
+    return await sendWorkbook(res, entry);
   } catch (err) {
     setProgress(token, { done: true, error: err.message });
     return next(err);
@@ -287,14 +317,25 @@ app.get('/api/export-all.xlsx', async (req, res, next) => {
       lists,
       token,
     });
-    return sendWorkbook(res, entry);
+    return await sendWorkbook(res, entry);
   } catch (err) {
     setProgress(token, { done: true, error: err.message });
     return next(err);
   }
 });
 
-function sendWorkbook(res, { filePath, fileName, size }) {
+async function sendWorkbook(res, { filePath, fileName, size }) {
+  // Confere o arquivo ANTES de escrever qualquer cabeçalho. Se falhar depois do
+  // Content-Disposition já enviado, o navegador salva a mensagem de erro como
+  // se fosse a planilha — o usuário abre um "xlsx corrompido" que na verdade é
+  // um JSON.
+  try {
+    await fsp.access(filePath, fs.constants.R_OK);
+  } catch {
+    console.error(`[erro] arquivo gerado sumiu antes do envio: ${filePath}`);
+    return res.status(500).json({ error: 'O arquivo gerado expirou. Tente baixar de novo.' });
+  }
+
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader(
     'Content-Disposition',
@@ -304,12 +345,10 @@ function sendWorkbook(res, { filePath, fileName, size }) {
 
   const stream = fs.createReadStream(filePath);
 
-  // Um stream sem listener de 'error' derruba o processo inteiro: se o arquivo
-  // sumir do disco entre a geração e o envio, o container reiniciava.
+  // Um stream sem listener de 'error' derruba o processo inteiro.
   stream.on('error', (err) => {
     console.error(`[erro] falha ao ler ${filePath}: ${err.message}`);
-    if (!res.headersSent) res.status(500).json({ error: 'Falha ao ler o arquivo gerado.' });
-    else res.destroy(err);
+    res.destroy(err);
   });
 
   return stream.pipe(res);
