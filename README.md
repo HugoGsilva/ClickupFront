@@ -247,8 +247,31 @@ sem vazar nada: o relatório pode ser compartilhado como está.
 Também confirma se `CLICKUP_TOKEN` e `CLICKUP_FOLDER_ID` estão certos e lista os
 ids de todas as listas da pasta.
 
-Existe a flag `--sem-mascara`, que imprime os valores reais. É só para conferir
-localmente — o resultado **não** deve ser compartilhado.
+### Conferir as premissas da API
+
+```bash
+npm run diagnostico -- --estrutura
+```
+
+Imprime, campo a campo, se a API real tem o formato que o exportador assume —
+só nomes de campos e tipos, **nenhum valor**:
+
+```
+    ok  tarefa      status.status         string
+    ok  opção       name                  string
+    !!  opção       label                 AUSENTE
+        valor na tarefa: string (esperado: string com o id da opção)
+```
+
+Isto existe por um motivo específico: os testes automatizados rodam contra um
+ClickUp falso, escrito junto com o app. Eles provam que o app é **coerente**,
+não que a leitura da API v2 está **certa** — se uma premissa sobre um nome de
+campo estiver errada, o falso repete o mesmo erro e o teste passa mesmo assim.
+Um `!!` em algo que o exportador usa é o aviso de que aquela coluna vai sair
+errada.
+
+Existe também a flag `--sem-mascara`, que imprime os valores reais. É só para
+conferir localmente — o resultado **não** deve ser compartilhado.
 
 ## Testes
 

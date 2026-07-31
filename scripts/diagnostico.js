@@ -28,6 +28,84 @@ const has = (name) => args.includes(name);
 const onlyList = flag('--lista');
 const sampleSize = Number(flag('--amostra') || 10);
 const mask = !has('--sem-mascara');
+const estrutura = has('--estrutura');
+
+/**
+ * Confere, campo a campo, se a API real tem o formato que o exportador assume.
+ *
+ * Isto existe porque os testes automatizados rodam contra um ClickUp falso: eles
+ * provam que o app é coerente, não que a leitura da API está certa. Se alguma
+ * premissa aqui aparecer como AUSENTE, aquela coluna sai errada — e é aqui que
+ * se descobre isso, sem precisar exportar nada.
+ *
+ * Imprime só nomes de campos e tipos. Nenhum valor.
+ */
+function conferirEstrutura(tarefa, definicoes, lista) {
+  const tipo = (valor) => {
+    if (valor === null) return 'nulo';
+    if (valor === undefined) return 'AUSENTE';
+    if (Array.isArray(valor)) return `lista[${valor.length}]`;
+    return typeof valor;
+  };
+
+  const caminho = (objeto, chave) =>
+    chave.split('.').reduce((atual, parte) => (atual === null || atual === undefined ? atual : atual[parte]), objeto);
+
+  const checar = (rotulo, objeto, chave) => {
+    const valor = caminho(objeto, chave);
+    const marca = valor === undefined ? '  !!' : '  ok';
+    console.log(`  ${marca}  ${pad(rotulo, 26)}${pad(chave, 26)}${tipo(valor)}`);
+  };
+
+  console.log('\n  Estrutura da LISTA');
+  for (const chave of ['id', 'name', 'taskCount', 'orderindex']) checar('lista', lista, chave);
+
+  console.log('\n  Estrutura da TAREFA (campos que viram coluna)');
+  for (const chave of [
+    'id',
+    'name',
+    'status.status',
+    'priority.priority',
+    'assignees',
+    'tags',
+    'date_created',
+    'due_date',
+    'time_estimate',
+    'list.name',
+    'creator.username',
+    'url',
+    'text_content',
+    'custom_fields',
+  ]) {
+    checar('tarefa', tarefa, chave);
+  }
+
+  const dropdown = (definicoes || []).find((definicao) => definicao.type === 'drop_down');
+  if (dropdown) {
+    console.log('\n  Estrutura de um DROP_DOWN (o mais frágil da conversão)');
+    checar('definição', dropdown, 'type_config.options');
+    const opcao = dropdown.type_config?.options?.[0];
+    if (opcao) {
+      for (const chave of ['id', 'name', 'label', 'orderindex']) checar('opção', opcao, chave);
+      console.log(
+        `        o exportador usa "name" e cai para "label" — aqui existe: ${
+          opcao.name !== undefined ? 'name' : opcao.label !== undefined ? 'apenas label' : 'NENHUM DOS DOIS'
+        }`,
+      );
+    }
+    const naTarefa = (tarefa.custom_fields || []).find((campo) => campo.id === dropdown.id);
+    if (naTarefa) {
+      console.log(`        valor na tarefa: ${tipo(naTarefa.value)} (esperado: string com o id da opção)`);
+    }
+  }
+
+  const data = (definicoes || []).find((definicao) => definicao.type === 'date');
+  if (data) {
+    const naTarefa = (tarefa.custom_fields || []).find((campo) => campo.id === data.id);
+    console.log('\n  Estrutura de um campo DATE');
+    console.log(`        valor na tarefa: ${tipo(naTarefa?.value)} (esperado: string de milissegundos)`);
+  }
+}
 
 const pad = (text, width) => String(text).padEnd(width);
 
@@ -154,6 +232,8 @@ async function analisarLista(list) {
     ['ID customizado', (task) => task.custom_id],
     ['Subtarefa (tem pai)', (task) => task.parent],
   ];
+
+  if (estrutura) conferirEstrutura(sample[0], definitions, list);
 
   console.log('\n  Campos padrão preenchidos na amostra:');
   for (const [nome, get] of padroes) {
