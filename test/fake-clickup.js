@@ -73,7 +73,12 @@ function makeTask(listId, listName, index) {
     custom_id: index === 0 ? 'PREC-1' : null,
     name: `Tarefa ${index} — ${listName}`,
     text_content: `Descrição da tarefa ${index}`,
-    status: { status: index % 2 ? 'em andamento' : 'concluído' },
+    // Tarefas pares são concluídas. Metade delas com status do tipo "closed" e
+    // metade do tipo "done" — como no ClickUp de verdade, onde "Concluído"
+    // costuma ser do tipo done e escapa do include_closed=false.
+    status: index % 2
+      ? { status: 'em andamento', type: 'custom' }
+      : { status: 'concluído', type: index % 4 === 0 ? 'closed' : 'done' },
     priority: index % 4 === 0 ? { priority: 'urgent' } : null,
     assignees: [{ username: 'Hugo Silva', email: 'hugo@exemplo.com' }],
     tags: [{ name: 'precatorio' }],
@@ -154,8 +159,9 @@ export function startFakeClickUp() {
       // Página vazia no meio, sem sinalizar fim.
       if (listId === '903' && page === 1) return send({ tasks: [], last_page: false });
 
-      // include_closed=false esconde as tarefas de índice par, que o makeTask
-      // marca como "concluído" — é o que permite testar o filtro da tela.
+      // Como o ClickUp de verdade: include_closed=false remove só os status do
+      // tipo "closed". Os do tipo "done" continuam vindo, e cabe ao app
+      // descartá-los — é essa a diferença que fazia a caixa parecer inútil.
       const semConcluidas = url.searchParams.get('include_closed') === 'false';
 
       const slice = [];
@@ -169,7 +175,7 @@ export function startFakeClickUp() {
             value: `valor-${i}`,
           });
         }
-        if (semConcluidas && i % 2 === 0) continue;
+        if (semConcluidas && task.status.type === 'closed') continue;
         slice.push(task);
       }
       return send({ tasks: slice, last_page: start + 100 >= list.task_count });

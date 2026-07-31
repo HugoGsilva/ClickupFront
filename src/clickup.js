@@ -349,6 +349,21 @@ export async function getListFields(listId) {
  * Busca todas as tarefas da lista, paginando de 100 em 100 até a última página.
  * `onProgress` recebe o total acumulado a cada página.
  */
+// Tipos de status que o ClickUp considera terminados. Todo status pertence a
+// um destes quatro tipos: open, custom, done e closed.
+const TIPOS_CONCLUIDOS = new Set(['done', 'closed']);
+
+/**
+ * `include_closed=false` só tira do resultado os status do tipo "closed" — um
+ * status do tipo "done" ("Concluído", "Finalizado", "Pago") continua vindo.
+ * Como é justamente esse o tipo usado na maioria dos fluxos, desmarcar a caixa
+ * parecia não fazer efeito nenhum. Aqui o corte é pelo tipo do status, então
+ * vale para os dois casos.
+ */
+export function tarefaConcluida(task) {
+  return TIPOS_CONCLUIDOS.has(String(task?.status?.type || '').toLowerCase());
+}
+
 export async function* iterateTaskPages(
   listId,
   // `incluirConcluidas` vem por chamada, não de config: duas exportações
@@ -386,7 +401,10 @@ export async function* iterateTaskPages(
       );
     }
 
-    yield batch;
+    // O filtro vai só no que é entregue: a paginação continua olhando a página
+    // crua, senão uma página inteira de concluídas seria lida como "acabou" e a
+    // exportação pararia no meio.
+    yield incluirConcluidas ? batch : batch.filter((task) => !tarefaConcluida(task));
 
     if (data.last_page || batch.length === 0) break;
   }

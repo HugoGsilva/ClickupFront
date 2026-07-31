@@ -632,7 +632,9 @@ try {
     const com = await baixar(1);
     const sem = await baixar(0);
 
-    // A lista 901 tem 3 tarefas, 2 delas "concluídas" (índices 0 e 2).
+    // A lista 901 tem 3 tarefas, 2 delas concluídas: a 0 com status do tipo
+    // "closed" (que o ClickUp filtra) e a 2 do tipo "done" (que ele devolve
+    // mesmo com include_closed=false, e o app precisa descartar).
     assert.equal(com.linhas, 3);
     assert.equal(sem.linhas, 1, 'sem concluídas deveria sobrar só a tarefa em aberto');
     assert.match(sem.nome, /EM-ABERTO/, 'o nome do arquivo deveria distinguir os dois');

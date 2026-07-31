@@ -12,11 +12,70 @@ const els = {
   tudoDetalhe: document.getElementById('tudo-detalhe'),
   tudoProgresso: document.getElementById('tudo-progresso'),
   concluidas: document.getElementById('concluidas'),
+  concluidasEstado: document.getElementById('concluidas-estado'),
+  concluidasDetalhe: document.getElementById('concluidas-detalhe'),
 };
 
 let allLists = [];
 
 const nf = new Intl.NumberFormat('pt-BR');
+
+/**
+ * Os dois modos da caixa "Incluir tarefas concluídas". Marcar ou desmarcar
+ * muda o conteúdo do arquivo, então a tela precisa mudar junto — sem isso a
+ * caixa parecia não fazer nada, e só o nome do arquivo baixado denunciava a
+ * diferença.
+ */
+const FILTROS = {
+  com: {
+    estado: 'Todas as tarefas',
+    detalhe: 'A planilha vem completa: em aberto e concluídas. Desmarque para deixar as concluídas de fora.',
+    botao: 'Baixar Excel',
+    botaoTudo: 'Baixar tudo',
+    contagem: 'Tarefas na lista, segundo o ClickUp',
+    tudo: (abas, total) => `${abas} abas, ${total} tarefas — um arquivo só`,
+  },
+  sem: {
+    estado: 'Só em aberto',
+    detalhe: 'As concluídas ficam de fora e o arquivo sai com “EM ABERTO” no nome — vale para todos os downloads.',
+    botao: 'Baixar em aberto',
+    botaoTudo: 'Baixar tudo em aberto',
+    contagem: 'Total no ClickUp, com as concluídas — a planilha filtrada vem menor',
+    tudo: (abas, total) => `${abas} abas, só o que está em aberto — de ${total} tarefas no total`,
+  },
+};
+
+function filtroAtual() {
+  return els.concluidas.checked ? FILTROS.com : FILTROS.sem;
+}
+
+function rotuloDe(button) {
+  const filtro = filtroAtual();
+  return button === els.baixarTudo ? filtro.botaoTudo : filtro.botao;
+}
+
+function textoTudo() {
+  const filtro = filtroAtual();
+  const total = allLists.reduce((soma, list) => soma + (list.taskCount || 0), 0);
+  return filtro.tudo(nf.format(allLists.length), nf.format(total));
+}
+
+/** Reflete na tela o estado da caixa de concluídas. */
+function aplicarFiltro() {
+  const filtro = filtroAtual();
+
+  document.body.classList.toggle('filtro-em-aberto', !els.concluidas.checked);
+  els.concluidasEstado.textContent = filtro.estado;
+  els.concluidasDetalhe.textContent = filtro.detalhe;
+  if (allLists.length) els.tudoDetalhe.textContent = textoTudo();
+
+  // Botões em download ficam de fora: o rótulo deles é "Gerando…" e será
+  // reposto no fim, já com o filtro que estiver valendo naquele momento.
+  for (const button of document.querySelectorAll('.download')) {
+    if (!button.disabled) button.textContent = rotuloDe(button);
+  }
+  for (const count of els.lists.querySelectorAll('.row__count')) count.title = filtro.contagem;
+}
 
 function showError(message) {
   els.feedback.className = 'feedback';
@@ -73,7 +132,7 @@ function rowFor(list) {
   const count = document.createElement('span');
   count.className = 'row__count';
   count.textContent = list.taskCount === null ? '—' : nf.format(list.taskCount);
-  count.title = 'Tarefas na lista';
+  count.title = filtroAtual().contagem;
 
   const status = document.createElement('span');
   status.className = 'row__status';
@@ -81,7 +140,7 @@ function rowFor(list) {
   const button = document.createElement('button');
   button.className = 'download';
   button.type = 'button';
-  button.textContent = 'Baixar Excel';
+  button.textContent = rotuloDe(button);
   button.addEventListener('click', () => baixarLista(list, { button, status, row }));
 
   const progress = document.createElement('div');
@@ -133,13 +192,15 @@ function saveBlob(blob, fileName) {
  * Serve tanto para uma lista quanto para a pasta inteira — o que muda é a URL,
  * o total esperado e onde o texto de progresso aparece.
  */
-async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFallback }) {
+async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFallback, aoLimpar }) {
   // Vai na URL, e não como estado do servidor: o arquivo guardado em cache é
   // por filtro, então marcar ou desmarcar a caixa devolve o arquivo certo.
   const url = `${urlBase}?concluidas=${els.concluidas.checked ? 1 : 0}`;
   const token =
     crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const rotuloOriginal = button.textContent;
+  // O texto de progresso da pasta ocupa a mesma linha do resumo ("19 abas,
+  // 92.513 tarefas"); limpar direto deixava a linha vazia depois do download.
+  const limpar = aoLimpar || (() => { status.textContent = ''; });
 
   showError('');
   button.disabled = true;
@@ -218,7 +279,7 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
     if (aviso) showAviso(`${nomeFallback.replace(/\.xlsx$/, '')}: ${aviso}`);
     setTimeout(() => {
       bar.style.width = '0';
-      status.textContent = '';
+      limpar();
     }, 4000);
   } catch (err) {
     bar.style.width = '0';
@@ -228,7 +289,9 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
   } finally {
     clearInterval(poll);
     button.disabled = false;
-    button.textContent = rotuloOriginal;
+    // Rótulo do filtro que vale AGORA, não o de quando o download começou: a
+    // caixa pode ter sido marcada durante os minutos de geração.
+    button.textContent = rotuloDe(button);
   }
 }
 
@@ -252,6 +315,9 @@ function baixarTudo() {
     bar: els.tudoProgresso,
     totalEsperado: total,
     nomeFallback: 'clickup.xlsx',
+    aoLimpar: () => {
+      els.tudoDetalhe.textContent = textoTudo();
+    },
   });
 }
 
@@ -272,7 +338,7 @@ async function loadLists({ force = false } = {}) {
     }
     const total = allLists.reduce((sum, list) => sum + (list.taskCount || 0), 0);
     els.subtitle.textContent = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
-    els.tudoDetalhe.textContent = `${nf.format(allLists.length)} abas, ${nf.format(total)} tarefas — um arquivo só`;
+    els.tudoDetalhe.textContent = textoTudo();
     render();
   } catch (err) {
     els.lists.innerHTML = '';
@@ -284,5 +350,23 @@ async function loadLists({ force = false } = {}) {
 els.search.addEventListener('input', render);
 els.refresh.addEventListener('click', () => loadLists({ force: true }));
 els.baixarTudo.addEventListener('click', baixarTudo);
+els.concluidas.addEventListener('change', aplicarFiltro);
 
+/** Estado inicial da caixa, definido por CLICKUP_INCLUDE_CLOSED no servidor. */
+async function carregarPadrao() {
+  try {
+    const res = await fetch('/api/config', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (typeof data.incluirConcluidasPadrao === 'boolean') {
+      els.concluidas.checked = data.incluirConcluidasPadrao;
+      aplicarFiltro();
+    }
+  } catch {
+    /* sem resposta, fica o padrão do HTML */
+  }
+}
+
+aplicarFiltro();
+carregarPadrao();
 loadLists();

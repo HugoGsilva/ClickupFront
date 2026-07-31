@@ -202,7 +202,13 @@ function setProgress(token, patch) {
 // API
 // ---------------------------------------------------------------------------
 app.get('/api/config', (req, res) => {
-  res.json({ title: config.appTitle, user: req.authenticatedUser });
+  res.json({
+    title: config.appTitle,
+    user: req.authenticatedUser,
+    // A caixa da tela começa neste estado. Sem mandar isto, CLICKUP_INCLUDE_CLOSED
+    // valia só para quem chamasse a API direto: a tela abria sempre marcada.
+    incluirConcluidasPadrao: config.includeClosed,
+  });
 });
 
 app.get('/api/lists', async (req, res, next) => {

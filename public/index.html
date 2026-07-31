@@ -33,10 +33,13 @@
 
       <label class="opcao" for="concluidas">
         <input type="checkbox" id="concluidas" checked />
-        <span>
+        <span class="opcao__texto">
           <strong>Incluir tarefas concluídas</strong>
-          <small>Desmarque para exportar só o que está em aberto — vale para todos os downloads.</small>
+          <!-- Preenchido pelo app.js: o texto muda conforme a caixa, para a
+               diferença entre os dois modos ficar visível antes de baixar. -->
+          <small id="concluidas-detalhe"></small>
         </span>
+        <span class="opcao__estado" id="concluidas-estado"></span>
       </label>
 
       <div class="search">

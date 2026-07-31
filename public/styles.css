@@ -135,14 +135,49 @@ h1 {
   cursor: pointer;
 }
 
-.opcao span {
+.opcao__texto {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-width: 0;
 }
 
-.opcao small {
+.opcao__texto small {
   font-size: 12.5px;
   color: var(--muted);
+}
+
+/* Selo do modo atual: a diferença entre "tudo" e "só em aberto" precisa ser
+   legível de relance, sem depender de olhar o estado da caixa. */
+.opcao__estado {
+  flex: none;
+  align-self: center;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 20px;
+  padding: 3px 12px;
+  color: var(--green);
+  background: var(--green-soft);
+  border: 1px solid transparent;
+}
+
+body.filtro-em-aberto .opcao {
+  border-color: #f2d98c;
+  background: #fffdf6;
+}
+
+body.filtro-em-aberto .opcao__estado {
+  color: #8a6100;
+  background: #fff8e6;
+  border-color: #f2d98c;
+}
+
+/* Com o filtro ligado a contagem do ClickUp deixa de valer para a planilha:
+   ela conta as concluídas, que não vão para o arquivo. */
+body.filtro-em-aberto .row__count {
+  color: var(--muted);
+  background: var(--accent-soft);
 }
 
 .search {
