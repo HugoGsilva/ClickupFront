@@ -31,6 +31,9 @@ export const config = {
       : [],
   teamId: (process.env.CLICKUP_TEAM_ID || '').trim(),
 
+  // Cuidado: a API do ClickUp TROCA o conjunto, não soma. Com true a
+  // exportação traz só o que está arquivado. Medido: lista com 2.443 tarefas
+  // devolve 0 quando archived=true.
   includeArchived: bool('CLICKUP_INCLUDE_ARCHIVED', false),
   includeClosed: bool('CLICKUP_INCLUDE_CLOSED', true),
   includeSubtasks: bool('CLICKUP_INCLUDE_SUBTASKS', true),

@@ -31,7 +31,7 @@ Copie `.env.example` para `.env` e preencha:
 | `AUTH_USER` / `AUTH_PASSWORD` | Usuário e senha do login do navegador. |
 | `CLICKUP_INCLUDE_CLOSED` | `true` inclui tarefas concluídas (padrão). |
 | `CLICKUP_INCLUDE_SUBTASKS` | `true` inclui subtarefas (padrão). |
-| `CLICKUP_INCLUDE_ARCHIVED` | `true` inclui itens arquivados (padrão `false`). |
+| `CLICKUP_INCLUDE_ARCHIVED` | **Troca** para os itens arquivados, não soma a eles: com `true` a exportação traz *só* o que está arquivado. Padrão `false`. |
 | `APP_TITLE` | Título mostrado no topo. |
 | `TZ` | Fuso usado nas datas da planilha (padrão `America/Sao_Paulo`). |
 | `PORT` | Porta do servidor (padrão `3000`). |
