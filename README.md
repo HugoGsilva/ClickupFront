@@ -137,10 +137,8 @@ Campo customizado vira coluna **mesmo quando está vazio em todas as tarefas** �
 a planilha reflete a estrutura da lista, não só o que foi preenchido. Campo do
 tipo `button` fica de fora: é ação de interface, não dado.
 
-As demais colunas do ClickUp (ID, Status, Prioridade, Responsáveis, Tags, datas,
-tempos, Descrição, Link) **não são exportadas** — por decisão de escopo, já que
-vinham vazias nesta operação. Para trazer alguma de volta, é uma linha em
-`standardColumns()` (`src/excel.js`), com o exemplo pronto no comentário.
+Outras colunas do ClickUp (Prioridade, Descrição, Link, tempo estimado, tarefa
+pai) não são exportadas. Para trazer alguma, veja a tabela abaixo.
 
 ### Mudar as colunas
 
@@ -148,14 +146,18 @@ Tudo fica em **`src/listas.js`**, sem tocar na lógica:
 
 | O que você quer | Onde mexer |
 | --- | --- |
-| Reordenar as colunas | mude a ordem de `ORDEM_DOS_CAMPOS` |
-| Tirar um campo da planilha | acrescente o nome dele em `CAMPOS_OCULTOS` |
+| Renomear uma coluna padrão | mude o `titulo` em `COLUNAS_PADRAO` (a `chave` não muda) |
+| Tirar uma coluna padrão | apague a linha dela em `COLUNAS_PADRAO` |
+| Reordenar as colunas padrão | mude a ordem de `COLUNAS_PADRAO` |
+| Reordenar os campos customizados | mude a ordem de `ORDEM_DOS_CAMPOS` |
+| Tirar um campo customizado | acrescente o nome dele em `CAMPOS_OCULTOS` |
 | Incluir um campo novo do ClickUp | **nada** — ele aparece sozinho, no fim |
 | Colocar o campo novo numa posição | acrescente o nome em `ORDEM_DOS_CAMPOS` |
 
-Trazer de volta uma coluna padrão do ClickUp (Status, Link, Responsáveis…) é uma
-linha em `standardColumns()`, em `src/excel.js`, com o exemplo pronto no
-comentário.
+Colunas padrão que ainda não têm leitor (Prioridade, Descrição, Link…) precisam
+de uma linha em `LEITORES_PADRAO`, em `src/excel.js` — o arquivo mostra o
+formato, e uma chave inexistente em `COLUNAS_PADRAO` falha na hora, com a lista
+das válidas.
 
 Depois de editar: `git push` → o CI publica a imagem → *Pull and redeploy* no
 Portainer.
