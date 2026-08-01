@@ -248,7 +248,7 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
     if (!inicio.ok && inicio.status !== 202) throw await erroDe(inicio);
 
     // Passo 2: espera terminar, acompanhando pelo progresso.
-    const aviso = await new Promise((resolve, reject) => {
+    const { aviso, linhas } = await new Promise((resolve, reject) => {
       const espera = setInterval(async () => {
         try {
           const res = await fetch(`/api/progress/${token}`, { cache: 'no-store' });
@@ -259,7 +259,7 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
             reject(new Error(progresso.error));
           } else if (progresso.done) {
             clearInterval(espera);
-            resolve(progresso.aviso || null);
+            resolve({ aviso: progresso.aviso || null, linhas: progresso.taskCount ?? null });
           }
         } catch {
           /* erro de rede no polling: tenta de novo no próximo tique */
@@ -275,7 +275,9 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
     saveBlob(blob, fileNameFrom(res.headers.get('Content-Disposition'), nomeFallback));
 
     bar.style.width = '100%';
-    status.textContent = 'baixado ✓';
+    // Mostra quantas linhas o arquivo tem de verdade: é o único número que
+    // corresponde ao que foi baixado — o da lista não muda com o filtro.
+    status.textContent = linhas ? `baixado ✓ · ${nf.format(linhas)} linhas` : 'baixado ✓';
     if (aviso) showAviso(`${nomeFallback.replace(/\.xlsx$/, '')}: ${aviso}`);
     setTimeout(() => {
       bar.style.width = '0';
