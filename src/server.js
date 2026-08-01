@@ -17,7 +17,7 @@ import {
   iterateTaskPages,
   tarefaConcluida,
 } from './clickup.js';
-import { writeWorkbook, buildFileName, validarColunas } from './excel.js';
+import { writeWorkbook, writeListPair, buildFileName, validarColunas } from './excel.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -60,7 +60,13 @@ const contagensEmCurso = new Map(); // listId -> promessa (a varredura apura os 
 const progressByToken = new Map(); // token -> { fetched, total, done, error, at }
 const emAndamento = new Map(); // chave -> { promessa, tokens } — dois cliques, uma geração
 
-const MAX_EXPORT_CACHE = 5;
+// A rodada deixa dois arquivos por lista (com e sem concluídas): 19 listas já
+// são 38 entradas. Com o teto antigo de 5, cada rodada apagaria o próprio
+// trabalho enquanto ainda estava rodando. Medido: ~180 bytes por linha, então
+// as 19 listas nos dois modos dão ~25 MB.
+const MAX_EXPORT_CACHE = Number(process.env.MAX_EXPORT_CACHE) > 0
+  ? Number(process.env.MAX_EXPORT_CACHE)
+  : 60;
 const PROGRESS_TTL_MS = 15 * 60 * 1000;
 const MAX_PROGRESS = 500;
 // Sem isto, o modo assíncrono deixava um cliente disparar uma geração por lista
@@ -243,8 +249,80 @@ function guardarContagem(listId, incluirConcluidas, total) {
  * para os dois. É isso que faz a caixa "incluir concluídas" trocar o número na
  * hora, em vez de disparar uma segunda varredura idêntica.
  */
-function contarTarefas(listId, token) {
-  const emCurso = contagensEmCurso.get(listId);
+async function escreverPar(list, avisar) {
+  // Sem engolir o erro: sem as definições, as colunas sairiam só da primeira
+  // página e campos preenchidos a partir da tarefa 101 sumiriam sem aviso.
+  const fieldDefinitions = await getListFields(list.id);
+
+  const caminhoCom = path.join(TEMP_DIR, `${randomUUID()}.xlsx`);
+  const caminhoSem = path.join(TEMP_DIR, `${randomUUID()}.xlsx`);
+  // 0600 desde a criação: os arquivos têm CPF e valores em claro, e o exceljs
+  // preserva a permissão do arquivo existente ao escrever nele.
+  await fsp.writeFile(caminhoCom, '', { mode: 0o600 });
+  await fsp.writeFile(caminhoSem, '', { mode: 0o600 });
+
+  try {
+    const totais = await writeListPair({
+      list,
+      fieldDefinitions,
+      pages: iterateTaskPages(list.id, { incluirConcluidas: true }),
+      caminhoCom,
+      caminhoSem,
+      concluida: tarefaConcluida,
+      // Página a página: são minutos de espera nas listas grandes, e sem isto a
+      // tela ficava parada em "contando…" sem sinal nenhum de vida.
+      onProgress: ({ com }) => avisar({ fetched: com }),
+    });
+
+    // A varredura terminou e os números valem, mas a planilha não pôde ser
+    // escrita (campo customizado aparecendo fora das primeiras 100 tarefas).
+    // Fica só a contagem: o download continua sendo gerado sob demanda e falha
+    // ali, alto, em vez de entregar um arquivo incompleto em silêncio.
+    if (totais.erro) {
+      await fsp.unlink(caminhoCom).catch(() => {});
+      await fsp.unlink(caminhoSem).catch(() => {});
+      console.warn(`[rodada] ${list.name}: contagem apurada, planilha não — ${totais.erro.message}`);
+      return totais;
+    }
+
+    const validoAte = Date.now() + config.contagemCacheSeconds * 1000;
+    const guardarArquivo = async (chave, filePath, nome, taskCount) => {
+      const { size } = await fsp.stat(filePath);
+      rememberExport(chave, {
+        at: Date.now(),
+        validoAte,
+        filePath,
+        fileName: buildFileName(nome),
+        taskCount,
+        size,
+        aviso: null,
+      });
+    };
+
+    await guardarArquivo(`lista:${list.id}:com`, caminhoCom, list.name, totais.com);
+    await guardarArquivo(`lista:${list.id}:sem`, caminhoSem, `${list.name} em aberto`, totais.sem);
+
+    return totais;
+  } catch (err) {
+    // Uma apuração que falhou no meio não pode deixar arquivo parcial com CPF
+    // no disco do container.
+    await fsp.unlink(caminhoCom).catch(() => {});
+    await fsp.unlink(caminhoSem).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Apura uma lista: os dois números e os dois arquivos, numa passada só.
+ *
+ * Contar e exportar percorrem exatamente as mesmas páginas — a única diferença
+ * é que uma escrevia as linhas e a outra as descartava. Fazendo junto, a
+ * varredura que a tela já paga para mostrar o número certo deixa o download
+ * pronto de graça: quem clicar em baixar depois recebe o arquivo na hora, sem
+ * tocar na API.
+ */
+function apurarLista(list, token) {
+  const emCurso = contagensEmCurso.get(list.id);
   if (emCurso) {
     // Quem chega no meio acompanha a mesma varredura, em vez de disparar outra.
     if (token) emCurso.tokens.add(token);
@@ -259,18 +337,10 @@ function contarTarefas(listId, token) {
   const promessa = (async () => {
     await pegarVaga();
     try {
-      let com = 0;
-      let sem = 0;
       avisar({ fetched: 0, done: false, error: null });
-      for await (const pagina of iterateTaskPages(listId, { incluirConcluidas: true })) {
-        com += pagina.length;
-        sem += pagina.filter((task) => !tarefaConcluida(task)).length;
-        // Página a página: são minutos de espera nas listas grandes, e sem isto
-        // a tela ficava parada em "contando…" sem sinal nenhum de vida.
-        avisar({ fetched: com });
-      }
-      guardarContagem(listId, true, com);
-      guardarContagem(listId, false, sem);
+      const { com, sem } = await escreverPar(list, avisar);
+      guardarContagem(list.id, true, com);
+      guardarContagem(list.id, false, sem);
       avisar({ fetched: com, done: true, contado: { com, sem } });
       return { com, sem };
     } catch (err) {
@@ -278,11 +348,11 @@ function contarTarefas(listId, token) {
       throw err;
     } finally {
       devolverVaga();
-      contagensEmCurso.delete(listId);
+      contagensEmCurso.delete(list.id);
     }
   })();
 
-  contagensEmCurso.set(listId, { promessa, tokens });
+  contagensEmCurso.set(list.id, { promessa, tokens });
   return promessa;
 }
 
@@ -301,8 +371,9 @@ function agendarContagens(lists) {
   for (const list of lists) {
     // `com` e `sem` saem da mesma varredura, então basta conferir um dos dois.
     if (contagemGuardada(list.id, true) !== null) continue;
-    if (contagensEmCurso.has(list.id) || filaContagem.includes(list.id)) continue;
-    filaContagem.push(list.id);
+    if (contagensEmCurso.has(list.id)) continue;
+    if (filaContagem.some((candidata) => candidata.id === list.id)) continue;
+    filaContagem.push(list);
   }
   girarFila();
 }
@@ -312,15 +383,15 @@ async function girarFila() {
   filaRodando = true;
   try {
     while (filaContagem.length) {
-      const listId = filaContagem.shift();
-      // Pode ter sido apurado no meio do caminho — por um download ou por
+      const list = filaContagem.shift();
+      // Pode ter sido apurada no meio do caminho — por um download ou por
       // alguém que clicou no número.
-      if (contagemGuardada(listId, true) !== null) continue;
+      if (contagemGuardada(list.id, true) !== null) continue;
       try {
-        await contarTarefas(listId);
+        await apurarLista(list);
       } catch (err) {
         // Uma lista com problema não pode parar as outras 18.
-        console.warn(`[contagem] lista ${listId} falhou: ${err.message}`);
+        console.warn(`[rodada] lista ${list.name} (${list.id}) falhou: ${err.message}`);
       }
     }
   } finally {
@@ -419,7 +490,7 @@ app.get('/api/lists/:listId/contagem', async (req, res, next) => {
     // responde na hora e o cliente acompanha por /api/progress.
     if (flag(req.query.async, false)) {
       setProgress(token, { fetched: 0, done: false, error: null });
-      contarTarefas(list.id, token).catch((err) => {
+      apurarLista(list, token).catch((err) => {
         console.error(`[contagem] ${list.name}: ${err.message}`);
       });
       return res.status(202).json({ status: 'contando' });
@@ -427,7 +498,7 @@ app.get('/api/lists/:listId/contagem', async (req, res, next) => {
 
     // Os dois números vêm da mesma varredura: mandar os dois deixa a tela
     // trocar de modo sem pedir nada de novo.
-    const contado = await contarTarefas(list.id, token);
+    const contado = await apurarLista(list, token);
     return res.json({ total: incluirConcluidas ? contado.com : contado.sem, cached: false, contado });
   } catch (err) {
     return next(err);
@@ -447,7 +518,10 @@ app.get('/api/progress/:token', (req, res) => {
  */
 async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas }) {
   const cached = exportCache.get(chave);
-  if (cached && Date.now() - cached.at < config.exportCacheSeconds * 1000) {
+  // A validade vai na própria entrada: o arquivo que a rodada deixou pronto
+  // vale pelo tempo da contagem (1 h), e o gerado sob demanda pelo tempo do
+  // cache de exportação (5 min).
+  if (cached && Date.now() < (cached.validoAte ?? cached.at + config.exportCacheSeconds * 1000)) {
     setProgress(token, {
       fetched: cached.taskCount,
       total: cached.taskCount,
@@ -571,7 +645,15 @@ async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas
     }
 
     const { size } = await fsp.stat(filePath);
-    const entry = { at: Date.now(), filePath, fileName: nomeArquivo, taskCount: jaEscritas, size, aviso };
+    const entry = {
+      at: Date.now(),
+      validoAte: Date.now() + config.exportCacheSeconds * 1000,
+      filePath,
+      fileName: nomeArquivo,
+      taskCount: jaEscritas,
+      size,
+      aviso,
+    };
     rememberExport(chave, entry);
 
     avisarTodos(chave, token, { done: true, fetched: jaEscritas, taskCount: jaEscritas, aviso });

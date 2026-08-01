@@ -306,8 +306,20 @@ Dá para sobrescrever sem tocar no código:
 >
 > Marcar ou desmarcar a caixa manda apurar sozinho o que ainda não tem número:
 > as listas entram numa fila, uma por vez, e as pílulas se atualizam conforme os
-> resultados chegam. Clicar num número apura aquela lista na frente da fila, e
-> baixar a planilha faz o mesmo sem custo nenhum.
+> resultados chegam. Clicar num número apura aquela lista na frente da fila.
+>
+> **Apurar já deixa o download pronto.** Contar e exportar percorrem as mesmas
+> páginas — a única diferença é escrever as linhas em vez de descartá-las —,
+> então a mesma passada rende os dois números e as duas planilhas (com e sem
+> concluídas), sem nenhuma requisição a mais. Medido: uma lista de 2.124 tarefas
+> leva 18,7 s para apurar, e os dois downloads seguintes saem em 27 ms e 15 ms,
+> do disco. Em troca, o arquivo entregue é o da última apuração, não gerado no
+> instante do clique — o botão **Atualizar** descarta tudo e força a regeração.
+>
+> Se a planilha não puder ser escrita (um campo customizado aparecendo com valor
+> fora das primeiras 100 tarefas, que a trava recusa), a contagem ainda sai: só
+> o arquivo é descartado, e o download daquela lista volta a ser gerado sob
+> demanda — falhando alto ali, em vez de entregar planilha incompleta.
 >
 > A API do ClickUp não tem endpoint de contagem: o único jeito é paginar as
 > tarefas, então isso custa uma requisição a cada 100 tarefas e vale por

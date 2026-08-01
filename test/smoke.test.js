@@ -954,6 +954,49 @@ try {
     throw new Error('a fila não apurou todas as listas');
   });
 
+  await test('apurar deixa o download pronto: baixar depois não toca na API', async () => {
+    const chamadas = () => requests.filter((r) => r.path.includes('/list/901/task')).length;
+
+    // Força uma apuração nova desta lista.
+    await fetch(`${appUrl}/api/lists?refresh=1`, { headers: { Authorization: credentials } });
+    await fetch(`${appUrl}/api/lists/901/contagem?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    const depoisDaApuracao = chamadas();
+
+    // Os dois modos saíram da mesma passada, então nenhum dos dois downloads
+    // pode voltar a paginar.
+    for (const concluidas of [1, 0]) {
+      const res = await fetch(`${appUrl}/api/lists/901/export.xlsx?concluidas=${concluidas}`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      const buffer = Buffer.from(await res.arrayBuffer());
+      assert.ok(buffer.length > 0, 'o arquivo veio vazio');
+      assert.equal(buffer.subarray(0, 2).toString(), 'PK', 'não parece um .xlsx');
+    }
+
+    assert.equal(chamadas(), depoisDaApuracao, 'os downloads deveriam vir do disco');
+  });
+
+  await test('planilha que não pode ser escrita não impede a contagem', async () => {
+    // A lista 904 tem um campo customizado que só aparece na tarefa 150: a
+    // trava impede o arquivo, mas o número tem de sair.
+    const res = await fetch(`${appUrl}/api/lists/904/contagem?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 200);
+    const { contado } = await res.json();
+    assert.equal(contado.com, 250);
+    assert.equal(typeof contado.sem, 'number');
+
+    // E o download continua falhando alto, em vez de entregar arquivo incompleto.
+    const download = await fetch(`${appUrl}/api/lists/904/export.xlsx?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(download.status, 500);
+  });
+
   await test('a segunda contagem vem do cache, sem tocar na API', async () => {
     const chamadas = () => requests.filter((r) => r.path.includes('/list/902/task')).length;
     await fetch(`${appUrl}/api/lists/902/contagem?concluidas=1`, {
