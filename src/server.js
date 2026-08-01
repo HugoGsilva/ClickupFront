@@ -220,7 +220,7 @@ function chaveContagem(listId, incluirConcluidas) {
 function contagemGuardada(listId, incluirConcluidas) {
   const entry = contagemCache.get(chaveContagem(listId, incluirConcluidas));
   if (!entry) return null;
-  if (Date.now() - entry.at >= config.exportCacheSeconds * 1000) return null;
+  if (Date.now() - entry.at >= config.contagemCacheSeconds * 1000) return null;
   return entry.total;
 }
 
@@ -286,6 +286,48 @@ function contarTarefas(listId, token) {
   return promessa;
 }
 
+/**
+ * Fila que apura sozinha as listas que ainda não têm contagem.
+ *
+ * Uma por vez, de propósito: são ~1.070 requisições para as 19 listas, e
+ * `contarTarefas` ocupa uma das vagas de geração. Sequencial, sobra sempre vaga
+ * para quem estiver baixando — em paralelo, a fila tomaria as três e os
+ * downloads ficariam esperando a contagem terminar.
+ */
+const filaContagem = [];
+let filaRodando = false;
+
+function agendarContagens(lists) {
+  for (const list of lists) {
+    // `com` e `sem` saem da mesma varredura, então basta conferir um dos dois.
+    if (contagemGuardada(list.id, true) !== null) continue;
+    if (contagensEmCurso.has(list.id) || filaContagem.includes(list.id)) continue;
+    filaContagem.push(list.id);
+  }
+  girarFila();
+}
+
+async function girarFila() {
+  if (filaRodando) return;
+  filaRodando = true;
+  try {
+    while (filaContagem.length) {
+      const listId = filaContagem.shift();
+      // Pode ter sido apurado no meio do caminho — por um download ou por
+      // alguém que clicou no número.
+      if (contagemGuardada(listId, true) !== null) continue;
+      try {
+        await contarTarefas(listId);
+      } catch (err) {
+        // Uma lista com problema não pode parar as outras 18.
+        console.warn(`[contagem] lista ${listId} falhou: ${err.message}`);
+      }
+    }
+  } finally {
+    filaRodando = false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
@@ -317,6 +359,8 @@ app.get('/api/lists', async (req, res, next) => {
             com: contagemGuardada(list.id, true),
             sem: contagemGuardada(list.id, false),
           },
+          // Para a linha mostrar "contando…" enquanto a fila passa por ela.
+          contando: contagensEmCurso.has(list.id),
           // A chave do cache leva o filtro, então os dois modos precisam ser
           // consultados: procurar só `lista:<id>` devolvia false para sempre.
           cached: exportCache.has(`lista:${list.id}:com`) || exportCache.has(`lista:${list.id}:sem`),
@@ -324,6 +368,23 @@ app.get('/api/lists', async (req, res, next) => {
     });
   } catch (err) {
     next(err);
+  }
+});
+
+/**
+ * Manda apurar o que ainda não tem contagem, sem segurar a requisição.
+ *
+ * É o que a tela chama ao marcar ou desmarcar a caixa: em vez de a pessoa ter
+ * de clicar em cada número, as listas que faltam entram na fila e as pílulas se
+ * atualizam sozinhas conforme os números chegam.
+ */
+app.get('/api/contagens', async (req, res, next) => {
+  try {
+    const catalog = await loadCatalog();
+    agendarContagens(catalog.lists);
+    return res.json({ pendentes: filaContagem.length + contagensEmCurso.size });
+  } catch (err) {
+    return next(err);
   }
 });
 

@@ -930,6 +930,30 @@ try {
     assert.equal(segundo.taskCount, primeiro.taskCount);
   });
 
+  await test('trocar a caixa manda apurar sozinho o que falta', async () => {
+    const res = await fetch(`${appUrl}/api/contagens`, { headers: { Authorization: credentials } });
+    assert.equal(res.status, 200);
+    const { pendentes } = await res.json();
+    assert.equal(typeof pendentes, 'number');
+
+    // A lista 903 falha de propósito (página vazia no meio). As outras não
+    // podem ficar sem número por causa dela.
+    for (let i = 0; i < 300; i++) {
+      const lists = await (
+        await fetch(`${appUrl}/api/lists`, { headers: { Authorization: credentials } })
+      ).json();
+      const boas = lists.lists.filter((list) => list.id !== '903');
+      if (boas.every((list) => typeof list.contado.com === 'number')) {
+        for (const list of boas) {
+          assert.equal(typeof list.contado.sem, 'number', `${list.name} ficou sem o outro modo`);
+        }
+        return;
+      }
+      await sleep(50);
+    }
+    throw new Error('a fila não apurou todas as listas');
+  });
+
   await test('a segunda contagem vem do cache, sem tocar na API', async () => {
     const chamadas = () => requests.filter((r) => r.path.includes('/list/902/task')).length;
     await fetch(`${appUrl}/api/lists/902/contagem?concluidas=1`, {

@@ -17,8 +17,16 @@ const els = {
 };
 
 let allLists = [];
+let subtituloBase = '';
 
 const nf = new Intl.NumberFormat('pt-BR');
+
+/** Quantas listas ainda faltam apurar, ao lado do resumo do topo. */
+function pintarPendentes(pendentes) {
+  els.subtitle.textContent = pendentes
+    ? `${subtituloBase} · contando ${nf.format(pendentes)} lista${pendentes > 1 ? 's' : ''}…`
+    : subtituloBase;
+}
 
 /**
  * Os dois modos da caixa "Incluir tarefas concluídas". Marcar ou desmarcar
@@ -76,6 +84,16 @@ function pintarContagem(count, list) {
     count.removeAttribute('tabindex');
     return;
   }
+
+  // A fila do servidor está passando por esta lista agora.
+  if (list.contando) {
+    count.textContent = 'contando…';
+    count.classList.remove('row__count--real', 'row__count--cru');
+    count.classList.add('row__count--contando');
+    count.title = 'Apurando a contagem real desta lista.';
+    return;
+  }
+  count.classList.remove('row__count--contando');
 
   count.textContent = list.taskCount === null ? '—' : nf.format(list.taskCount);
   count.classList.remove('row__count--real');
@@ -463,6 +481,7 @@ async function sincronizarContagens() {
     const data = await res.json();
     const porId = new Map((data.lists || []).map((list) => [list.id, list]));
     for (const list of allLists) {
+      list.contando = Boolean(porId.get(list.id)?.contando);
       const novo = porId.get(list.id)?.contado || {};
       // Só os modos que o servidor sabe: `null` é "não contei ainda", e
       // sobrescrever com ele apagaria um número que a tela já tem.
@@ -475,6 +494,43 @@ async function sincronizarContagens() {
     aplicarFiltro();
   } catch {
     /* cosmético: sem isto o usuário só clica na contagem para ver o número */
+  }
+}
+
+/**
+ * Manda o servidor apurar o que falta e vai atualizando a tela conforme chega.
+ *
+ * Disparado ao marcar ou desmarcar a caixa: sem isto, a pessoa tinha de clicar
+ * número por número. Uma varredura resolve os dois modos, então isto só roda
+ * para as listas que ainda não foram contadas — e o que já foi apurado vale por
+ * uma hora, para todo mundo.
+ */
+let atualizacaoAtiva = false;
+
+async function atualizarContagens() {
+  if (atualizacaoAtiva || !allLists.length) return;
+  atualizacaoAtiva = true;
+
+  const faltando = () =>
+    allLists.filter((list) => typeof list.contado?.[modoAtual()] !== 'number').length;
+
+  try {
+    const res = await fetch('/api/contagens', { cache: 'no-store' });
+    if (!res.ok) return;
+
+    // As 19 listas levam ~12 minutos no pior caso. O teto aqui é folgado o
+    // bastante para isso e ainda assim finito, para a tela não ficar pendurada
+    // num servidor que parou de responder.
+    for (let i = 0; i < 700 && faltando(); i++) {
+      pintarPendentes(faltando());
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await sincronizarContagens();
+    }
+  } catch {
+    /* cosmético: o número continua clicável, um a um */
+  } finally {
+    atualizacaoAtiva = false;
+    pintarPendentes(0);
   }
 }
 
@@ -512,7 +568,8 @@ async function loadLists({ force = false } = {}) {
       document.title = `${data.folder.name} — Exportar tarefas`;
     }
     const total = allLists.reduce((sum, list) => sum + (list.taskCount || 0), 0);
-    els.subtitle.textContent = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
+    subtituloBase = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
+    pintarPendentes(0);
     els.tudoDetalhe.textContent = textoTudo();
     render();
   } catch (err) {
@@ -526,12 +583,10 @@ els.search.addEventListener('input', render);
 els.refresh.addEventListener('click', () => loadLists({ force: true }));
 els.baixarTudo.addEventListener('click', baixarTudo);
 els.concluidas.addEventListener('change', () => {
-  // Repinta na hora com o que a tela já tem e, em seguida, busca no servidor o
-  // que ele já apurou — de outra pessoa, de um download ou de uma contagem
-  // anterior. Não conta nada: só lê. Sem isto, desmarcar a caixa deixava o
-  // número parado no total do ClickUp até alguém clicar nele de novo.
+  // Repinta na hora com o que a tela já tem e manda apurar o que falta. O que
+  // já foi contado troca de número instantaneamente; o resto vai chegando.
   aplicarFiltro();
-  sincronizarContagens();
+  atualizarContagens();
 });
 
 /** Estado inicial da caixa, definido por CLICKUP_INCLUDE_CLOSED no servidor. */

@@ -304,10 +304,17 @@ Dá para sobrescrever sem tocar no código:
 > DIVINO, 135 na tela e 137 na planilha. Verificado: com
 > `CLICKUP_INCLUDE_SUBTASKS=false` os dois números batem.
 >
-> Clicar no número apura a contagem real, e baixar a planilha faz o mesmo sem
-> custo nenhum. A API do ClickUp não tem endpoint de contagem: o único jeito é
-> paginar as tarefas, então isso custa uma requisição a cada 100 tarefas e vale
-> por `EXPORT_CACHE_SECONDS`. Como o corte das concluídas é feito pelo app —
+> Marcar ou desmarcar a caixa manda apurar sozinho o que ainda não tem número:
+> as listas entram numa fila, uma por vez, e as pílulas se atualizam conforme os
+> resultados chegam. Clicar num número apura aquela lista na frente da fila, e
+> baixar a planilha faz o mesmo sem custo nenhum.
+>
+> A API do ClickUp não tem endpoint de contagem: o único jeito é paginar as
+> tarefas, então isso custa uma requisição a cada 100 tarefas e vale por
+> `CONTAGEM_CACHE_SECONDS` (1 hora). As 19 listas somam ~1.070 requisições e
+> ~12 minutos — por isso a validade é longa: com um valor curto, a contagem
+> expiraria antes de a rodada terminar e o app recontaria em loop. Como o corte
+> das concluídas é feito pelo app —
 > `include_closed=false` só remove os status do tipo `closed`, e os do tipo
 > `done` continuam vindo —, **uma varredura apura os dois modos de uma vez**.
 > Por isso marcar e desmarcar a caixa troca o número na hora, sem contar de
