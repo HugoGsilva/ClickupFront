@@ -70,6 +70,7 @@ function pintarContagem(count, list) {
   if (typeof real === 'number') {
     count.textContent = nf.format(real);
     count.classList.add('row__count--real');
+    count.classList.remove('row__count--cru');
     count.title = filtro.contagemReal(nf.format(real));
     count.removeAttribute('role');
     count.removeAttribute('tabindex');
@@ -78,6 +79,10 @@ function pintarContagem(count, list) {
 
   count.textContent = list.taskCount === null ? '—' : nf.format(list.taskCount);
   count.classList.remove('row__count--real');
+  // Número que ainda não foi apurado: é o do ClickUp, não o da planilha. Com a
+  // caixa marcada ele ficava com a mesma cara de um número real, e não havia
+  // como saber, olhando, qual dos dois se estava lendo.
+  count.classList.add('row__count--cru');
   count.title = filtro.contagem;
   count.setAttribute('role', 'button');
   count.setAttribute('tabindex', '0');
@@ -98,9 +103,15 @@ async function contar(list, count) {
       { cache: 'no-store' },
     );
     if (!res.ok) throw await erroDe(res);
-    const { total } = await res.json();
+    const { total, contado } = await res.json();
 
+    // O servidor apura os dois modos numa varredura só e manda os dois. Guardar
+    // ambos é o que faz a caixa "incluir concluídas" trocar o número na hora,
+    // sem contar de novo.
     list.contado = { ...(list.contado || {}), [modo]: total };
+    for (const outro of ['com', 'sem']) {
+      if (typeof contado?.[outro] === 'number') list.contado[outro] = contado[outro];
+    }
   } catch (err) {
     showError(`${list.name}: ${err.message}`);
   } finally {
@@ -393,6 +404,7 @@ function baixarLista(list, { button, status, row }) {
 
 /** Traz do servidor as contagens reais já apuradas, sem re-renderizar a tela. */
 async function sincronizarContagens() {
+  if (!allLists.length) return;
   try {
     const res = await fetch('/api/lists', { cache: 'no-store' });
     if (!res.ok) return;
@@ -461,7 +473,14 @@ async function loadLists({ force = false } = {}) {
 els.search.addEventListener('input', render);
 els.refresh.addEventListener('click', () => loadLists({ force: true }));
 els.baixarTudo.addEventListener('click', baixarTudo);
-els.concluidas.addEventListener('change', aplicarFiltro);
+els.concluidas.addEventListener('change', () => {
+  // Repinta na hora com o que a tela já tem e, em seguida, busca no servidor o
+  // que ele já apurou — de outra pessoa, de um download ou de uma contagem
+  // anterior. Não conta nada: só lê. Sem isto, desmarcar a caixa deixava o
+  // número parado no total do ClickUp até alguém clicar nele de novo.
+  aplicarFiltro();
+  sincronizarContagens();
+});
 
 /** Estado inicial da caixa, definido por CLICKUP_INCLUDE_CLOSED no servidor. */
 async function carregarPadrao() {

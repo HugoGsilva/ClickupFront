@@ -349,8 +349,9 @@ export async function getListFields(listId) {
  * Busca todas as tarefas da lista, paginando de 100 em 100 até a última página.
  * `onProgress` recebe o total acumulado a cada página.
  */
-// Tipos de status que o ClickUp considera terminados. Todo status pertence a
-// um destes quatro tipos: open, custom, done e closed.
+// Tipos de status que o ClickUp considera terminados. Os demais tipos que
+// aparecem nesta conta — open, unstarted e custom — seguem valendo como tarefa
+// em aberto.
 const TIPOS_CONCLUIDOS = new Set(['done', 'closed']);
 
 /**

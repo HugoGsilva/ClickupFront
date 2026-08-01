@@ -267,6 +267,14 @@ body.filtro-em-aberto .row__count--real {
   font-weight: 600;
 }
 
+/* Ainda não apurado: é o total do ClickUp, que não conta subtarefas e não muda
+   com o filtro. Fica discreto para não se passar pelo número da planilha. */
+.row__count--cru {
+  color: var(--muted);
+  background: var(--accent-soft);
+  font-weight: 400;
+}
+
 .row__count--contando,
 body.filtro-em-aberto .row__count--contando {
   color: var(--muted);

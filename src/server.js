@@ -9,7 +9,14 @@ import { pipeline } from 'node:stream/promises';
 
 import { config, configProblems } from './config.js';
 import { basicAuth } from './auth.js';
-import { ClickUpError, getFolder, getList, getListFields, iterateTaskPages } from './clickup.js';
+import {
+  ClickUpError,
+  getFolder,
+  getList,
+  getListFields,
+  iterateTaskPages,
+  tarefaConcluida,
+} from './clickup.js';
 import { writeWorkbook, buildFileName, validarColunas } from './excel.js';
 
 const publicDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -49,7 +56,7 @@ const exportCache = new Map(); // chave -> { at, filePath, fileName, taskCount }
 // Não existe endpoint de contagem na API do ClickUp — o único jeito é paginar
 // as tarefas, então isto é sob demanda e fica guardado.
 const contagemCache = new Map(); // `${listId}:com|sem` -> { at, total }
-const contagensEmCurso = new Map(); // mesma chave -> promessa
+const contagensEmCurso = new Map(); // listId -> promessa (a varredura apura os dois modos)
 const progressByToken = new Map(); // token -> { fetched, total, done, error, at }
 const emAndamento = new Map(); // chave -> { promessa, tokens } — dois cliques, uma geração
 
@@ -228,28 +235,37 @@ function guardarContagem(listId, incluirConcluidas, total) {
  * Custa as mesmas requisições que a exportação (uma a cada 100 tarefas), então
  * entra na mesma fila de vagas das exportações e dois pedidos iguais dividem o
  * mesmo trabalho.
+ *
+ * A varredura é sempre a completa, e os DOIS números saem dela: o corte das
+ * concluídas é feito aqui, sobre a mesma página, então apurar os dois modos
+ * custa exatamente o mesmo que apurar um. Medido contra a API real: 9
+ * requisições para as 845 tarefas de uma lista, tanto para um número quanto
+ * para os dois. É isso que faz a caixa "incluir concluídas" trocar o número na
+ * hora, em vez de disparar uma segunda varredura idêntica.
  */
-function contarTarefas(listId, incluirConcluidas) {
-  const chave = chaveContagem(listId, incluirConcluidas);
-  const emCurso = contagensEmCurso.get(chave);
+function contarTarefas(listId) {
+  const emCurso = contagensEmCurso.get(listId);
   if (emCurso) return emCurso;
 
   const trabalho = (async () => {
     await pegarVaga();
     try {
-      let total = 0;
-      for await (const pagina of iterateTaskPages(listId, { incluirConcluidas })) {
-        total += pagina.length;
+      let com = 0;
+      let sem = 0;
+      for await (const pagina of iterateTaskPages(listId, { incluirConcluidas: true })) {
+        com += pagina.length;
+        sem += pagina.filter((task) => !tarefaConcluida(task)).length;
       }
-      guardarContagem(listId, incluirConcluidas, total);
-      return total;
+      guardarContagem(listId, true, com);
+      guardarContagem(listId, false, sem);
+      return { com, sem };
     } finally {
       devolverVaga();
-      contagensEmCurso.delete(chave);
+      contagensEmCurso.delete(listId);
     }
   })();
 
-  contagensEmCurso.set(chave, trabalho);
+  contagensEmCurso.set(listId, trabalho);
   return trabalho;
 }
 
@@ -284,7 +300,9 @@ app.get('/api/lists', async (req, res, next) => {
             com: contagemGuardada(list.id, true),
             sem: contagemGuardada(list.id, false),
           },
-          cached: exportCache.has(`lista:${list.id}`),
+          // A chave do cache leva o filtro, então os dois modos precisam ser
+          // consultados: procurar só `lista:<id>` devolvia false para sempre.
+          cached: exportCache.has(`lista:${list.id}:com`) || exportCache.has(`lista:${list.id}:sem`),
         })),
     });
   } catch (err) {
@@ -306,10 +324,18 @@ app.get('/api/lists/:listId/contagem', async (req, res, next) => {
 
     const incluirConcluidas = flag(req.query.concluidas, config.includeClosed);
     const guardada = contagemGuardada(list.id, incluirConcluidas);
-    if (guardada !== null) return res.json({ total: guardada, cached: true });
+    if (guardada !== null) {
+      return res.json({
+        total: guardada,
+        cached: true,
+        contado: { com: contagemGuardada(list.id, true), sem: contagemGuardada(list.id, false) },
+      });
+    }
 
-    const total = await contarTarefas(list.id, incluirConcluidas);
-    return res.json({ total, cached: false });
+    // Os dois números vêm da mesma varredura: mandar os dois deixa a tela
+    // trocar de modo sem pedir nada de novo.
+    const contado = await contarTarefas(list.id);
+    return res.json({ total: incluirConcluidas ? contado.com : contado.sem, cached: false, contado });
   } catch (err) {
     return next(err);
   }
@@ -332,6 +358,10 @@ async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas
     setProgress(token, {
       fetched: cached.taskCount,
       total: cached.taskCount,
+      // Sem isto, baixar de novo dentro dos 5 minutos do cache perdia o
+      // "· N linhas" na tela e a contagem da linha voltava para o número do
+      // ClickUp — como se o segundo download soubesse menos que o primeiro.
+      taskCount: cached.taskCount,
       done: true,
       cached: true,
       aviso: cached.aviso || null,
@@ -368,6 +398,12 @@ async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas
       error: null,
     });
 
+    // Quantas tarefas estariam EM ABERTO em cada lista. Só dá para saber quando
+    // a exportação é a completa: aí as páginas trazem tudo e o corte é nosso.
+    // Com o filtro ligado as páginas já vêm cortadas, e o total do outro modo
+    // não passa por aqui.
+    const emAberto = new Map();
+
     const sheets = [];
     for (const [indice, list] of lists.entries()) {
       sheets.push({
@@ -378,9 +414,12 @@ async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas
         fieldDefinitions: await getListFields(list.id),
         pages: (async function* () {
           avisarTodos(chave, token, { listaAtual: list.name, indice: indice + 1 });
+          let abertas = 0;
           for await (const pagina of iterateTaskPages(list.id, { incluirConcluidas })) {
+            if (incluirConcluidas) abertas += pagina.filter((task) => !tarefaConcluida(task)).length;
             yield pagina;
           }
+          if (incluirConcluidas) emAberto.set(list.id, abertas);
         })(),
       });
     }
@@ -412,7 +451,15 @@ async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas
 
     // Exportar já percorreu tudo: aproveita a contagem exata de cada aba em vez
     // de fazer o usuário pagar as mesmas requisições de novo para ver o número.
-    for (const aba of resumo) guardarContagem(aba.listId, incluirConcluidas, aba.tasks);
+    // Quando a exportação foi a completa, o número do OUTRO modo saiu da mesma
+    // varredura — então desmarcar a caixa depois de baixar já mostra o valor
+    // certo, sem nenhuma requisição nova.
+    for (const aba of resumo) {
+      guardarContagem(aba.listId, incluirConcluidas, aba.tasks);
+      if (incluirConcluidas && emAberto.has(aba.listId)) {
+        guardarContagem(aba.listId, false, emAberto.get(aba.listId));
+      }
+    }
 
     // Divergência de contagem é AVISO, não recusa. A falha que motivava isto
     // (página vazia / resposta sem `tasks`) agora é detectada na origem, em
