@@ -773,6 +773,52 @@ try {
     assert.ok(Date.now() - started < 1000, 'download em cache deveria ser imediato');
   });
 
+  await test('a contagem real muda com o filtro, ao contrário do task_count', async () => {
+    const contar = async (concluidas) => {
+      const res = await fetch(`${appUrl}/api/lists/901/contagem?concluidas=${concluidas}`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      return (await res.json()).total;
+    };
+
+    // A lista 901 tem 3 tarefas: uma em aberto, uma com status do tipo "closed"
+    // e uma do tipo "done". Só a primeira sobra quando as concluídas saem.
+    assert.equal(await contar(1), 3);
+    assert.equal(await contar(0), 1);
+
+    // O task_count do catálogo continua 3 nos dois casos — é justamente essa
+    // diferença que o número clicável da tela existe para mostrar.
+    const lists = await (
+      await fetch(`${appUrl}/api/lists`, { headers: { Authorization: credentials } })
+    ).json();
+    const divaneide = lists.lists.find((list) => list.id === '901');
+    assert.equal(divaneide.taskCount, 3);
+    assert.equal(divaneide.contado.com, 3);
+    assert.equal(divaneide.contado.sem, 1);
+  });
+
+  await test('a contagem não pode virar porta para listas fora do escopo', async () => {
+    const res = await fetch(`${appUrl}/api/lists/999/contagem`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 404);
+  });
+
+  await test('a segunda contagem vem do cache, sem tocar na API', async () => {
+    const chamadas = () => requests.filter((r) => r.path.includes('/list/902/task')).length;
+    await fetch(`${appUrl}/api/lists/902/contagem?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    const depois = chamadas();
+    assert.ok(depois > 0, 'a primeira contagem tinha que paginar as tarefas');
+
+    await fetch(`${appUrl}/api/lists/902/contagem?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(chamadas(), depois, 'a segunda deveria vir do cache');
+  });
+
   // Por último: este bloco bloqueia o IP de teste de propósito.
   console.log('\nForça bruta');
 

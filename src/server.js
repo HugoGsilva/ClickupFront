@@ -43,6 +43,13 @@ app.use((req, res, next) => {
 // ---------------------------------------------------------------------------
 let folderCache = null; // { at, data }
 const exportCache = new Map(); // chave -> { at, filePath, fileName, taskCount }
+// Contagem REAL por lista e por filtro. O task_count que o ClickUp devolve no
+// catálogo é sempre o total da lista: não muda com "incluir concluídas" e não
+// conta subtarefas, então o número da tela nunca batia com as linhas do arquivo.
+// Não existe endpoint de contagem na API do ClickUp — o único jeito é paginar
+// as tarefas, então isto é sob demanda e fica guardado.
+const contagemCache = new Map(); // `${listId}:com|sem` -> { at, total }
+const contagensEmCurso = new Map(); // mesma chave -> promessa
 const progressByToken = new Map(); // token -> { fetched, total, done, error, at }
 const emAndamento = new Map(); // chave -> { promessa, tokens } — dois cliques, uma geração
 
@@ -96,6 +103,7 @@ async function loadCatalog({ force = false } = {}) {
       exportCache.delete(chave);
       apagarDepois(entry.filePath);
     }
+    contagemCache.clear();
   }
 
   let catalog;
@@ -198,6 +206,53 @@ function setProgress(token, patch) {
   progressByToken.set(token, { ...(progressByToken.get(token) || {}), ...patch, at: now });
 }
 
+function chaveContagem(listId, incluirConcluidas) {
+  return `${listId}:${incluirConcluidas ? 'com' : 'sem'}`;
+}
+
+function contagemGuardada(listId, incluirConcluidas) {
+  const entry = contagemCache.get(chaveContagem(listId, incluirConcluidas));
+  if (!entry) return null;
+  if (Date.now() - entry.at >= config.exportCacheSeconds * 1000) return null;
+  return entry.total;
+}
+
+function guardarContagem(listId, incluirConcluidas, total) {
+  if (!listId || typeof total !== 'number') return;
+  contagemCache.set(chaveContagem(listId, incluirConcluidas), { at: Date.now(), total });
+}
+
+/**
+ * Conta as tarefas de uma lista percorrendo as páginas — sem montar planilha.
+ *
+ * Custa as mesmas requisições que a exportação (uma a cada 100 tarefas), então
+ * entra na mesma fila de vagas das exportações e dois pedidos iguais dividem o
+ * mesmo trabalho.
+ */
+function contarTarefas(listId, incluirConcluidas) {
+  const chave = chaveContagem(listId, incluirConcluidas);
+  const emCurso = contagensEmCurso.get(chave);
+  if (emCurso) return emCurso;
+
+  const trabalho = (async () => {
+    await pegarVaga();
+    try {
+      let total = 0;
+      for await (const pagina of iterateTaskPages(listId, { incluirConcluidas })) {
+        total += pagina.length;
+      }
+      guardarContagem(listId, incluirConcluidas, total);
+      return total;
+    } finally {
+      devolverVaga();
+      contagensEmCurso.delete(chave);
+    }
+  })();
+
+  contagensEmCurso.set(chave, trabalho);
+  return trabalho;
+}
+
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
@@ -223,11 +278,40 @@ app.get('/api/lists', async (req, res, next) => {
           id: list.id,
           name: list.name,
           taskCount: list.taskCount,
+          // Contagens reais já apuradas (por download ou por clique) voltam
+          // junto: assim recarregar a página não perde o número certo.
+          contado: {
+            com: contagemGuardada(list.id, true),
+            sem: contagemGuardada(list.id, false),
+          },
           cached: exportCache.has(`lista:${list.id}`),
         })),
     });
   } catch (err) {
     next(err);
+  }
+});
+
+/**
+ * Quantas tarefas a planilha desta lista traria com o filtro atual. É o número
+ * que corresponde ao arquivo — diferente do task_count do catálogo.
+ */
+app.get('/api/lists/:listId/contagem', async (req, res, next) => {
+  try {
+    const catalog = await loadCatalog();
+    const list = catalog.lists.find((candidate) => candidate.id === req.params.listId);
+    if (!list) {
+      return res.status(404).json({ error: 'Lista não encontrada no escopo configurado.' });
+    }
+
+    const incluirConcluidas = flag(req.query.concluidas, config.includeClosed);
+    const guardada = contagemGuardada(list.id, incluirConcluidas);
+    if (guardada !== null) return res.json({ total: guardada, cached: true });
+
+    const total = await contarTarefas(list.id, incluirConcluidas);
+    return res.json({ total, cached: false });
+  } catch (err) {
+    return next(err);
   }
 });
 
@@ -325,6 +409,10 @@ async function gerarExport({ chave, nomeArquivo, lists, token, incluirConcluidas
     }
 
     jaEscritas = resumo.reduce((soma, aba) => soma + aba.tasks, 0);
+
+    // Exportar já percorreu tudo: aproveita a contagem exata de cada aba em vez
+    // de fazer o usuário pagar as mesmas requisições de novo para ver o número.
+    for (const aba of resumo) guardarContagem(aba.listId, incluirConcluidas, aba.tasks);
 
     // Divergência de contagem é AVISO, não recusa. A falha que motivava isto
     // (página vazia / resposta sem `tasks`) agora é detectada na origem, em

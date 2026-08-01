@@ -32,7 +32,8 @@ const FILTROS = {
     detalhe: 'A planilha vem completa: em aberto e concluídas. Desmarque para deixar as concluídas de fora.',
     botao: 'Baixar Excel',
     botaoTudo: 'Baixar tudo',
-    contagem: 'Tarefas na lista, segundo o ClickUp',
+    contagem: 'Total da lista no ClickUp. Clique para contar as linhas da planilha.',
+    contagemReal: (n) => `${n} tarefas — contagem real, com as concluídas`,
     tudo: (abas, total) => `${abas} abas, ${total} tarefas — um arquivo só`,
   },
   sem: {
@@ -40,13 +41,74 @@ const FILTROS = {
     detalhe: 'As concluídas ficam de fora e o arquivo sai com “EM ABERTO” no nome — vale para todos os downloads.',
     botao: 'Baixar em aberto',
     botaoTudo: 'Baixar tudo em aberto',
-    contagem: 'Total no ClickUp, com as concluídas — a planilha filtrada vem menor',
+    contagem: 'Total no ClickUp, com as concluídas. Clique para contar só as em aberto.',
+    contagemReal: (n) => `${n} tarefas em aberto — contagem real`,
     tudo: (abas, total) => `${abas} abas, só o que está em aberto — de ${total} tarefas no total`,
   },
 };
 
 function filtroAtual() {
   return els.concluidas.checked ? FILTROS.com : FILTROS.sem;
+}
+
+function modoAtual() {
+  return els.concluidas.checked ? 'com' : 'sem';
+}
+
+/**
+ * Escreve a contagem da linha.
+ *
+ * O número do ClickUp é o total da lista: não muda com o filtro e não conta
+ * subtarefas. Quando existe contagem real para o modo atual — apurada por um
+ * download ou por um clique aqui — é ela que aparece, porque é a única que
+ * corresponde ao arquivo.
+ */
+function pintarContagem(count, list) {
+  const filtro = filtroAtual();
+  const real = list.contado?.[modoAtual()];
+
+  if (typeof real === 'number') {
+    count.textContent = nf.format(real);
+    count.classList.add('row__count--real');
+    count.title = filtro.contagemReal(nf.format(real));
+    count.removeAttribute('role');
+    count.removeAttribute('tabindex');
+    return;
+  }
+
+  count.textContent = list.taskCount === null ? '—' : nf.format(list.taskCount);
+  count.classList.remove('row__count--real');
+  count.title = filtro.contagem;
+  count.setAttribute('role', 'button');
+  count.setAttribute('tabindex', '0');
+}
+
+/** Pede ao servidor a contagem real desta lista no filtro que está valendo. */
+async function contar(list, count) {
+  if (count.dataset.contando === '1') return;
+  const modo = modoAtual();
+
+  count.dataset.contando = '1';
+  count.classList.add('row__count--contando');
+  count.textContent = 'contando…';
+
+  try {
+    const res = await fetch(
+      `/api/lists/${encodeURIComponent(list.id)}/contagem?concluidas=${modo === 'com' ? 1 : 0}`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) throw await erroDe(res);
+    const { total } = await res.json();
+
+    list.contado = { ...(list.contado || {}), [modo]: total };
+  } catch (err) {
+    showError(`${list.name}: ${err.message}`);
+  } finally {
+    delete count.dataset.contando;
+    count.classList.remove('row__count--contando');
+    // Repinta pelo modo de AGORA: a caixa pode ter mudado durante a contagem.
+    pintarContagem(count, list);
+  }
 }
 
 function rotuloDe(button) {
@@ -74,7 +136,14 @@ function aplicarFiltro() {
   for (const button of document.querySelectorAll('.download')) {
     if (!button.disabled) button.textContent = rotuloDe(button);
   }
-  for (const count of els.lists.querySelectorAll('.row__count')) count.title = filtro.contagem;
+  // Repinta sem re-renderizar: re-renderizar destruiria os botões que estão no
+  // meio de um download.
+  const porId = new Map(allLists.map((list) => [list.id, list]));
+  for (const row of els.lists.querySelectorAll('.row')) {
+    const list = porId.get(row.dataset.listId);
+    const count = row.querySelector('.row__count');
+    if (list && count && count.dataset.contando !== '1') pintarContagem(count, list);
+  }
 }
 
 function showError(message) {
@@ -131,8 +200,14 @@ function rowFor(list) {
 
   const count = document.createElement('span');
   count.className = 'row__count';
-  count.textContent = list.taskCount === null ? '—' : nf.format(list.taskCount);
-  count.title = filtroAtual().contagem;
+  pintarContagem(count, list);
+  count.addEventListener('click', () => contar(list, count));
+  count.addEventListener('keydown', (evento) => {
+    if (evento.key === 'Enter' || evento.key === ' ') {
+      evento.preventDefault();
+      contar(list, count);
+    }
+  });
 
   const status = document.createElement('span');
   status.className = 'row__status';
@@ -192,7 +267,7 @@ function saveBlob(blob, fileName) {
  * Serve tanto para uma lista quanto para a pasta inteira — o que muda é a URL,
  * o total esperado e onde o texto de progresso aparece.
  */
-async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFallback, aoLimpar }) {
+async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFallback, aoLimpar, aoContar }) {
   // Vai na URL, e não como estado do servidor: o arquivo guardado em cache é
   // por filtro, então marcar ou desmarcar a caixa devolve o arquivo certo.
   const url = `${urlBase}?concluidas=${els.concluidas.checked ? 1 : 0}`;
@@ -278,6 +353,9 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
     // Mostra quantas linhas o arquivo tem de verdade: é o único número que
     // corresponde ao que foi baixado — o da lista não muda com o filtro.
     status.textContent = linhas ? `baixado ✓ · ${nf.format(linhas)} linhas` : 'baixado ✓';
+    // O download já percorreu tudo: a contagem da linha passa a mostrar o
+    // número real, sem gastar as requisições de uma contagem separada.
+    if (typeof linhas === 'number') aoContar?.(linhas);
     if (aviso) showAviso(`${nomeFallback.replace(/\.xlsx$/, '')}: ${aviso}`);
     setTimeout(() => {
       bar.style.width = '0';
@@ -305,7 +383,35 @@ function baixarLista(list, { button, status, row }) {
     bar: row.querySelector('.row__progress'),
     totalEsperado: list.taskCount,
     nomeFallback: `${list.name}.xlsx`,
+    aoContar: (linhas) => {
+      list.contado = { ...(list.contado || {}), [modoAtual()]: linhas };
+      const count = row.querySelector('.row__count');
+      if (count) pintarContagem(count, list);
+    },
   });
+}
+
+/** Traz do servidor as contagens reais já apuradas, sem re-renderizar a tela. */
+async function sincronizarContagens() {
+  try {
+    const res = await fetch('/api/lists', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const porId = new Map((data.lists || []).map((list) => [list.id, list]));
+    for (const list of allLists) {
+      const novo = porId.get(list.id)?.contado || {};
+      // Só os modos que o servidor sabe: `null` é "não contei ainda", e
+      // sobrescrever com ele apagaria um número que a tela já tem.
+      for (const modo of ['com', 'sem']) {
+        if (typeof novo[modo] === 'number') {
+          list.contado = { ...(list.contado || {}), [modo]: novo[modo] };
+        }
+      }
+    }
+    aplicarFiltro();
+  } catch {
+    /* cosmético: sem isto o usuário só clica na contagem para ver o número */
+  }
 }
 
 function baixarTudo() {
@@ -320,6 +426,9 @@ function baixarTudo() {
     aoLimpar: () => {
       els.tudoDetalhe.textContent = textoTudo();
     },
+    // Exportar a pasta conta todas as listas de uma vez; puxa esses números
+    // para as linhas em vez de deixar cada uma pedir a contagem de novo.
+    aoContar: () => sincronizarContagens(),
   });
 }
 

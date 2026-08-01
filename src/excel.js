@@ -460,7 +460,9 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
     }
 
     sheet.commit();
-    resumo.push({ list: list?.name, tasks: total, columns: columns.length });
+    // O id vai junto do nome porque quem chama usa o resumo para guardar a
+    // contagem real por lista — e duas listas podem ter o mesmo nome.
+    resumo.push({ list: list?.name, listId: list?.id || null, tasks: total, columns: columns.length });
   }
 
   await workbook.commit();
