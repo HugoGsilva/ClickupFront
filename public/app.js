@@ -580,7 +580,14 @@ async function loadLists({ force = false } = {}) {
 }
 
 els.search.addEventListener('input', render);
-els.refresh.addEventListener('click', () => loadLists({ force: true }));
+els.refresh.addEventListener('click', async () => {
+  // "Atualizar" descarta as contagens guardadas, porque quem clica quer o
+  // estado novo do ClickUp. Sem a apuração logo em seguida, o botão fazia o
+  // contrário do que o nome promete: a pessoa clicava para atualizar os
+  // números e eles voltavam todos para o total cru do ClickUp.
+  await loadLists({ force: true });
+  atualizarContagens();
+});
 els.baixarTudo.addEventListener('click', baixarTudo);
 els.concluidas.addEventListener('change', () => {
   // Repinta na hora com o que a tela já tem e manda apurar o que falta. O que
