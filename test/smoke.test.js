@@ -62,6 +62,11 @@ const child = spawn(process.execPath, ['src/server.js'], {
     PORT: String(port),
     LISTS_CACHE_SECONDS: '0',
     EXPORT_CACHE_SECONDS: '300',
+    // O ClickUp falso não tem rate limit, e o teto existe para o de verdade.
+    // Mantê-lo em 90 fazia a suíte inteira disputar o mesmo orçamento: os
+    // testes do fim esperavam a janela de 60 s virar e falhavam por tempo, não
+    // por defeito.
+    CLICKUP_REQS_POR_MINUTO: '100000',
     // Freio de força bruta com números pequenos, para o teste ser rápido.
     AUTH_MAX_FAILURES: '5',
     AUTH_BLOCK_SECONDS: '2',
@@ -828,6 +833,54 @@ try {
     assert.equal(chamadas(), varredura, 'o outro modo não podia varrer de novo');
     assert.equal(sem.total, com.contado.sem);
     assert.ok(sem.total < com.total, 'sem as concluídas tem que sobrar menos');
+  });
+
+  await test('contagem assíncrona responde na hora e reporta o progresso', async () => {
+    const token = 'tok-contagem';
+    const inicio = await fetch(`${appUrl}/api/lists/903/contagem?concluidas=1&p=${token}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    // A lista 903 trunca de propósito: serve para provar que o erro chega ao
+    // cliente em vez de deixar a pílula girando para sempre.
+    assert.equal(inicio.status, 202);
+
+    for (let i = 0; i < 200; i++) {
+      const res = await fetch(`${appUrl}/api/progress/${token}`, {
+        headers: { Authorization: credentials },
+      });
+      const progresso = await res.json();
+      if (progresso.done) {
+        assert.ok(progresso.error, 'a lista que trunca tinha que reportar o erro');
+        return;
+      }
+      await sleep(50);
+    }
+    throw new Error('a contagem não reportou o fim');
+  });
+
+  await test('contagem assíncrona de lista boa devolve os dois modos', async () => {
+    const token = 'tok-contagem-ok';
+    const inicio = await fetch(`${appUrl}/api/lists/902/contagem?concluidas=0&p=${token}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.ok(inicio.status === 202 || inicio.ok, 'esperava 202 ou o número em cache');
+
+    if (inicio.status === 202) {
+      for (let i = 0; i < 200; i++) {
+        const res = await fetch(`${appUrl}/api/progress/${token}`, {
+          headers: { Authorization: credentials },
+        });
+        const progresso = await res.json();
+        if (progresso.error) throw new Error(progresso.error);
+        if (progresso.done) {
+          assert.equal(progresso.contado.com, 250);
+          assert.ok(progresso.contado.sem < 250, 'sem as concluídas tem que sobrar menos');
+          return;
+        }
+        await sleep(50);
+      }
+      throw new Error('a contagem não terminou a tempo');
+    }
   });
 
   await test('baixar também deixa pronto o número do outro modo', async () => {

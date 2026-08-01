@@ -88,29 +88,81 @@ function pintarContagem(count, list) {
   count.setAttribute('tabindex', '0');
 }
 
+/**
+ * Acompanha uma contagem em andamento, mostrando o número subir na pílula.
+ *
+ * Contar a lista maior leva ~2 minutos: sem este acompanhamento a tela ficava
+ * em "contando…" parado, indistinguível de travada.
+ */
+function acompanharContagem(token, count) {
+  return new Promise((resolve, reject) => {
+    let tentativas = 0;
+    const espera = setInterval(async () => {
+      // ~18 minutos. Passou disso, alguma coisa se perdeu no caminho e é melhor
+      // devolver o controle para a pessoa do que girar para sempre.
+      if (++tentativas > 1200) {
+        clearInterval(espera);
+        reject(new Error('a contagem demorou demais. Tente de novo.'));
+        return;
+      }
+      try {
+        const res = await fetch(`/api/progress/${token}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const progresso = await res.json();
+        if (progresso.error) {
+          clearInterval(espera);
+          reject(new Error(progresso.error));
+        } else if (progresso.done) {
+          clearInterval(espera);
+          resolve(progresso.contado || null);
+        } else if (progresso.fetched) {
+          count.textContent = `${nf.format(progresso.fetched)}…`;
+        }
+      } catch {
+        /* erro de rede no polling: tenta de novo no próximo tique */
+      }
+    }, 900);
+  });
+}
+
 /** Pede ao servidor a contagem real desta lista no filtro que está valendo. */
 async function contar(list, count) {
   if (count.dataset.contando === '1') return;
   const modo = modoAtual();
+  const token =
+    crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   count.dataset.contando = '1';
   count.classList.add('row__count--contando');
   count.textContent = 'contando…';
 
   try {
+    // Igual ao download: a requisição não fica aberta pelos minutos da
+    // varredura, então nenhum proxy no caminho derruba a contagem no meio.
     const res = await fetch(
-      `/api/lists/${encodeURIComponent(list.id)}/contagem?concluidas=${modo === 'com' ? 1 : 0}`,
+      `/api/lists/${encodeURIComponent(list.id)}/contagem?concluidas=${
+        modo === 'com' ? 1 : 0
+      }&p=${token}&async=1`,
       { cache: 'no-store' },
     );
-    if (!res.ok) throw await erroDe(res);
-    const { total, contado } = await res.json();
+    if (!res.ok && res.status !== 202) throw await erroDe(res);
+
+    // 202 = está contando agora. 200 = já estava no cache e veio na hora.
+    const { total, contado } =
+      res.status === 202
+        ? { contado: await acompanharContagem(token, count) }
+        : await res.json();
 
     // O servidor apura os dois modos numa varredura só e manda os dois. Guardar
     // ambos é o que faz a caixa "incluir concluídas" trocar o número na hora,
     // sem contar de novo.
-    list.contado = { ...(list.contado || {}), [modo]: total };
+    list.contado = { ...(list.contado || {}) };
+    if (typeof total === 'number') list.contado[modo] = total;
     for (const outro of ['com', 'sem']) {
       if (typeof contado?.[outro] === 'number') list.contado[outro] = contado[outro];
+    }
+    if (typeof list.contado[modo] !== 'number') {
+      throw new Error('a contagem terminou sem devolver o número. Tente de novo.');
     }
   } catch (err) {
     showError(`${list.name}: ${err.message}`);

@@ -243,30 +243,47 @@ function guardarContagem(listId, incluirConcluidas, total) {
  * para os dois. É isso que faz a caixa "incluir concluídas" trocar o número na
  * hora, em vez de disparar uma segunda varredura idêntica.
  */
-function contarTarefas(listId) {
+function contarTarefas(listId, token) {
   const emCurso = contagensEmCurso.get(listId);
-  if (emCurso) return emCurso;
+  if (emCurso) {
+    // Quem chega no meio acompanha a mesma varredura, em vez de disparar outra.
+    if (token) emCurso.tokens.add(token);
+    return emCurso.promessa;
+  }
 
-  const trabalho = (async () => {
+  const tokens = new Set(token ? [token] : []);
+  const avisar = (patch) => {
+    for (const alvo of tokens) setProgress(alvo, patch);
+  };
+
+  const promessa = (async () => {
     await pegarVaga();
     try {
       let com = 0;
       let sem = 0;
+      avisar({ fetched: 0, done: false, error: null });
       for await (const pagina of iterateTaskPages(listId, { incluirConcluidas: true })) {
         com += pagina.length;
         sem += pagina.filter((task) => !tarefaConcluida(task)).length;
+        // Página a página: são minutos de espera nas listas grandes, e sem isto
+        // a tela ficava parada em "contando…" sem sinal nenhum de vida.
+        avisar({ fetched: com });
       }
       guardarContagem(listId, true, com);
       guardarContagem(listId, false, sem);
+      avisar({ fetched: com, done: true, contado: { com, sem } });
       return { com, sem };
+    } catch (err) {
+      avisar({ done: true, error: err.message });
+      throw err;
     } finally {
       devolverVaga();
       contagensEmCurso.delete(listId);
     }
   })();
 
-  contagensEmCurso.set(listId, trabalho);
-  return trabalho;
+  contagensEmCurso.set(listId, { promessa, tokens });
+  return promessa;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,6 +340,7 @@ app.get('/api/lists/:listId/contagem', async (req, res, next) => {
     }
 
     const incluirConcluidas = flag(req.query.concluidas, config.includeClosed);
+    const token = typeof req.query.p === 'string' ? req.query.p.slice(0, 64) : null;
     const guardada = contagemGuardada(list.id, incluirConcluidas);
     if (guardada !== null) {
       return res.json({
@@ -332,9 +350,23 @@ app.get('/api/lists/:listId/contagem', async (req, res, next) => {
       });
     }
 
+    // Medido contra a API real: 1min53 nas 8.874 tarefas da SUED e 2min08 nas
+    // 17.083 da JESSICA. Segurar a requisição aberta esse tempo todo deixava a
+    // tela em "contando…" sem sinal de vida — e, atrás de um proxy com teto de
+    // resposta (Cloudflare corta em 100 s), a contagem das listas grandes
+    // simplesmente morria no meio. Mesmo tratamento que o download já tem:
+    // responde na hora e o cliente acompanha por /api/progress.
+    if (flag(req.query.async, false)) {
+      setProgress(token, { fetched: 0, done: false, error: null });
+      contarTarefas(list.id, token).catch((err) => {
+        console.error(`[contagem] ${list.name}: ${err.message}`);
+      });
+      return res.status(202).json({ status: 'contando' });
+    }
+
     // Os dois números vêm da mesma varredura: mandar os dois deixa a tela
     // trocar de modo sem pedir nada de novo.
-    const contado = await contarTarefas(list.id);
+    const contado = await contarTarefas(list.id, token);
     return res.json({ total: incluirConcluidas ? contado.com : contado.sem, cached: false, contado });
   } catch (err) {
     return next(err);
