@@ -371,6 +371,157 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
 }
 
 /**
+ * Prepara uma aba: colunas fixadas, cabeçalho formatado e o escritor de linhas.
+ *
+ * Extraído para que a exportação sob demanda e a rodada que gera os dois
+ * arquivos numa passada só compartilhem exatamente as mesmas travas — a de campo
+ * que aparece tarde, principalmente. Duas cópias dessa lógica seria pedir para
+ * uma delas envelhecer sem a proteção.
+ */
+function prepararAba(workbook, { list, fieldDefinitions = [], amostra = [], nomesUsados }) {
+  const { colunas: columns, vistos } = buildColumns(fieldDefinitions, amostra);
+  const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name, nomesUsados), {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
+
+  sheet.columns = columns.map((column, index) => ({
+    header: column.header,
+    key: `c${index}`,
+    width: column.width,
+    style: column.format ? { numFmt: column.format } : undefined,
+  }));
+
+  const header = sheet.getRow(1);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B3A55' } };
+  header.alignment = { vertical: 'middle', horizontal: 'left' };
+  header.height = 22;
+  header.commit();
+
+  sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
+
+  let total = 0;
+
+  const escrever = (pagina) => {
+    for (const task of pagina) {
+      // As colunas são fixadas antes da primeira linha (streaming), a partir da
+      // definição da lista mais a primeira página. Um campo preenchido só a
+      // partir da tarefa 101 não teria coluna e sumiria da planilha sem aviso —
+      // com dado de precatório, isso é inaceitável em silêncio.
+      for (const campo of task.custom_fields || []) {
+        // Excluído de propósito não é "desconhecido": sem esta checagem, um
+        // campo oculto ou de botão que só aparecesse na segunda página abortava
+        // a exportação alegando que ele não teria coluna.
+        if (campo?.type === 'button' || CAMPOS_OCULTOS.includes(campo?.name)) continue;
+        if (campo?.id && campo.value != null && campo.value !== '' && !vistos.has(campo.id)) {
+          throw new Error(
+            `Campo customizado "${campo.name || campo.id}" apareceu com valor fora das primeiras 100 tarefas ` +
+              `da lista "${list?.name}" e não teria coluna. Exportação abortada para não entregar planilha incompleta.`,
+          );
+        }
+      }
+
+      sheet.addRow(columns.map((column) => column.get(task) ?? null)).commit();
+      total++;
+    }
+  };
+
+  return {
+    escrever,
+    commit: () => sheet.commit(),
+    total: () => total,
+    colunas: columns.length,
+  };
+}
+
+function novoArquivo(filename) {
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+    filename,
+    useStyles: true,
+    useSharedStrings: false,
+  });
+  workbook.creator = 'ClickUp Export';
+  workbook.created = new Date();
+  return workbook;
+}
+
+/**
+ * Escreve, na MESMA passada de páginas, o arquivo completo e o só-em-aberto.
+ *
+ * Contar e exportar são o mesmo trabalho: as mesmas páginas, as mesmas
+ * requisições. A única diferença é que uma escreve as linhas e a outra as
+ * descarta. Aqui a passada rende as duas contagens e os dois arquivos, sem
+ * nenhuma requisição a mais — as em aberto são um subconjunto das mesmas
+ * páginas, então filtrar custa memória, não API.
+ */
+export async function writeListPair({
+  list,
+  fieldDefinitions = [],
+  pages,
+  caminhoCom,
+  caminhoSem,
+  concluida,
+  onProgress,
+}) {
+  const arquivoCom = novoArquivo(caminhoCom);
+  const arquivoSem = novoArquivo(caminhoSem);
+
+  const iterator = pages[Symbol.asyncIterator]();
+  const primeira = await iterator.next();
+  const primeiraPagina = primeira.done ? [] : primeira.value;
+
+  const abaCom = prepararAba(arquivoCom, { list, fieldDefinitions, amostra: primeiraPagina });
+  const abaSem = prepararAba(arquivoSem, { list, fieldDefinitions, amostra: primeiraPagina });
+
+  let com = 0;
+  let sem = 0;
+  let erro = null;
+
+  const escrever = (pagina) => {
+    const abertas = pagina.filter((task) => !concluida(task));
+    // Os números são somados aqui, e não lidos das abas: se a escrita falhar no
+    // meio, a contagem tem de sair certa mesmo assim.
+    com += pagina.length;
+    sem += abertas.length;
+
+    if (!erro) {
+      try {
+        abaCom.escrever(pagina);
+        abaSem.escrever(abertas);
+      } catch (err) {
+        // A trava de campo tardio existe para não entregar planilha incompleta,
+        // e continua valendo — o arquivo é descartado por quem chamou. Mas ela
+        // não pode levar a contagem junto: contar não entrega planilha nenhuma,
+        // e sem isto uma lista nessa situação ficaria para sempre sem número.
+        erro = err;
+      }
+    }
+
+    onProgress?.({ com, sem });
+  };
+
+  escrever(primeiraPagina);
+  if (!primeira.done) {
+    for (let atual = await iterator.next(); !atual.done; atual = await iterator.next()) {
+      escrever(atual.value);
+    }
+  }
+
+  // Fecha os dois de qualquer jeito, inclusive quando a escrita falhou: sem o
+  // commit, os descritores de arquivo do exceljs ficariam abertos.
+  try {
+    abaCom.commit();
+    abaSem.commit();
+    await arquivoCom.commit();
+    await arquivoSem.commit();
+  } catch (err) {
+    erro = erro || err;
+  }
+
+  return { com, sem, erro };
+}
+
+/**
  * Escreve o .xlsx direto no disco, uma linha por vez, sem nunca segurar todas as
  * tarefas na memória.
  *
@@ -382,13 +533,7 @@ function buildColumns(fieldDefinitions = [], amostra = []) {
  * async iterable de arrays de tarefas.
  */
 export async function writeWorkbook({ filePath, sheets, onProgress }) {
-  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
-    filename: filePath,
-    useStyles: true,
-    useSharedStrings: false,
-  });
-  workbook.creator = 'ClickUp Export';
-  workbook.created = new Date();
+  const workbook = novoArquivo(filePath);
 
   const resumo = [];
   const nomesUsados = new Set();
@@ -400,56 +545,16 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
     const primeira = await iterator.next();
     const primeiraPagina = primeira.done ? [] : primeira.value;
 
-    const { colunas: columns, vistos } = buildColumns(fieldDefinitions, primeiraPagina);
-    const sheet = workbook.addWorksheet(sanitizeSheetName(list?.name, nomesUsados), {
-      views: [{ state: 'frozen', ySplit: 1 }],
+    const aba = prepararAba(workbook, {
+      list,
+      fieldDefinitions,
+      amostra: primeiraPagina,
+      nomesUsados,
     });
 
-    sheet.columns = columns.map((column, index) => ({
-      header: column.header,
-      key: `c${index}`,
-      width: column.width,
-      style: column.format ? { numFmt: column.format } : undefined,
-    }));
-
-    const header = sheet.getRow(1);
-    header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    header.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2B3A55' } };
-    header.alignment = { vertical: 'middle', horizontal: 'left' };
-    header.height = 22;
-    header.commit();
-
-    sheet.autoFilter = {
-      from: { row: 1, column: 1 },
-      to: { row: 1, column: columns.length },
-    };
-
-    let total = 0;
-    const conhecidos = vistos;
-
     const escrever = (pagina) => {
-      for (const task of pagina) {
-        // As colunas são fixadas antes da primeira linha (streaming), a partir
-        // da definição da lista mais a primeira página. Um campo preenchido só
-        // a partir da tarefa 101 não teria coluna e sumiria da planilha sem
-        // aviso — com dado de precatório, isso é inaceitável em silêncio.
-        for (const campo of task.custom_fields || []) {
-          // Excluído de propósito não é "desconhecido": sem esta checagem, um
-          // campo oculto ou de botão que só aparecesse na segunda página
-          // abortava a exportação alegando que ele não teria coluna.
-          if (campo?.type === 'button' || CAMPOS_OCULTOS.includes(campo?.name)) continue;
-          if (campo?.id && campo.value != null && campo.value !== '' && !conhecidos.has(campo.id)) {
-            throw new Error(
-              `Campo customizado "${campo.name || campo.id}" apareceu com valor fora das primeiras 100 tarefas ` +
-                `da lista "${list?.name}" e não teria coluna. Exportação abortada para não entregar planilha incompleta.`,
-            );
-          }
-        }
-
-        sheet.addRow(columns.map((column) => column.get(task) ?? null)).commit();
-        total++;
-      }
-      onProgress?.({ list, total });
+      aba.escrever(pagina);
+      onProgress?.({ list, total: aba.total() });
     };
 
     escrever(primeiraPagina);
@@ -459,10 +564,11 @@ export async function writeWorkbook({ filePath, sheets, onProgress }) {
       }
     }
 
-    sheet.commit();
+    aba.commit();
+    const total = aba.total();
     // O id vai junto do nome porque quem chama usa o resumo para guardar a
     // contagem real por lista — e duas listas podem ter o mesmo nome.
-    resumo.push({ list: list?.name, listId: list?.id || null, tasks: total, columns: columns.length });
+    resumo.push({ list: list?.name, listId: list?.id || null, tasks: total, columns: aba.colunas });
   }
 
   await workbook.commit();

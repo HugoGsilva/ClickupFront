@@ -62,6 +62,11 @@ const child = spawn(process.execPath, ['src/server.js'], {
     PORT: String(port),
     LISTS_CACHE_SECONDS: '0',
     EXPORT_CACHE_SECONDS: '300',
+    // O ClickUp falso não tem rate limit, e o teto existe para o de verdade.
+    // Mantê-lo em 90 fazia a suíte inteira disputar o mesmo orçamento: os
+    // testes do fim esperavam a janela de 60 s virar e falhavam por tempo, não
+    // por defeito.
+    CLICKUP_REQS_POR_MINUTO: '100000',
     // Freio de força bruta com números pequenos, para o teste ser rápido.
     AUTH_MAX_FAILURES: '5',
     AUTH_BLOCK_SECONDS: '2',
@@ -803,6 +808,193 @@ try {
       headers: { Authorization: credentials },
     });
     assert.equal(res.status, 404);
+  });
+
+  await test('uma varredura só apura os dois modos', async () => {
+    const chamadas = () => requests.filter((r) => r.path.includes('/list/904/task')).length;
+    const contar = async (concluidas) => {
+      const res = await fetch(`${appUrl}/api/lists/904/contagem?concluidas=${concluidas}`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      return res.json();
+    };
+
+    const com = await contar(1);
+    const varredura = chamadas();
+    assert.ok(varredura > 0, 'a primeira contagem tinha que paginar as tarefas');
+    assert.equal(com.total, 250);
+    assert.equal(com.contado.com, 250);
+
+    // O outro modo já saiu da mesma passada: pedir agora não pode custar uma
+    // segunda varredura idêntica — é isso que faz a caixa da tela responder na
+    // hora em vez de contar tudo de novo.
+    const sem = await contar(0);
+    assert.equal(chamadas(), varredura, 'o outro modo não podia varrer de novo');
+    assert.equal(sem.total, com.contado.sem);
+    assert.ok(sem.total < com.total, 'sem as concluídas tem que sobrar menos');
+  });
+
+  await test('contagem assíncrona responde na hora e reporta o progresso', async () => {
+    const token = 'tok-contagem';
+    const inicio = await fetch(`${appUrl}/api/lists/903/contagem?concluidas=1&p=${token}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    // A lista 903 trunca de propósito: serve para provar que o erro chega ao
+    // cliente em vez de deixar a pílula girando para sempre.
+    assert.equal(inicio.status, 202);
+
+    for (let i = 0; i < 200; i++) {
+      const res = await fetch(`${appUrl}/api/progress/${token}`, {
+        headers: { Authorization: credentials },
+      });
+      const progresso = await res.json();
+      if (progresso.done) {
+        assert.ok(progresso.error, 'a lista que trunca tinha que reportar o erro');
+        return;
+      }
+      await sleep(50);
+    }
+    throw new Error('a contagem não reportou o fim');
+  });
+
+  await test('contagem assíncrona de lista boa devolve os dois modos', async () => {
+    const token = 'tok-contagem-ok';
+    const inicio = await fetch(`${appUrl}/api/lists/902/contagem?concluidas=0&p=${token}&async=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.ok(inicio.status === 202 || inicio.ok, 'esperava 202 ou o número em cache');
+
+    if (inicio.status === 202) {
+      for (let i = 0; i < 200; i++) {
+        const res = await fetch(`${appUrl}/api/progress/${token}`, {
+          headers: { Authorization: credentials },
+        });
+        const progresso = await res.json();
+        if (progresso.error) throw new Error(progresso.error);
+        if (progresso.done) {
+          assert.equal(progresso.contado.com, 250);
+          assert.ok(progresso.contado.sem < 250, 'sem as concluídas tem que sobrar menos');
+          return;
+        }
+        await sleep(50);
+      }
+      throw new Error('a contagem não terminou a tempo');
+    }
+  });
+
+  await test('baixar também deixa pronto o número do outro modo', async () => {
+    const chamadas = () => requests.filter((r) => r.path.includes('/list/901/task')).length;
+
+    const res = await fetch(`${appUrl}/api/lists/901/export.xlsx?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 200);
+    await res.arrayBuffer();
+    const depoisDoDownload = chamadas();
+
+    const contagem = await fetch(`${appUrl}/api/lists/901/contagem?concluidas=0`, {
+      headers: { Authorization: credentials },
+    });
+    const { total, cached } = await contagem.json();
+    assert.equal(cached, true, 'o download já tinha apurado esse número');
+    assert.equal(total, 1, 'a lista 901 tem 1 tarefa em aberto');
+    assert.equal(chamadas(), depoisDoDownload, 'ver o outro modo não podia custar requisição');
+  });
+
+  await test('download em cache continua informando quantas linhas o arquivo tem', async () => {
+    const baixar = async (token) => {
+      const inicio = await fetch(`${appUrl}/api/lists/902/export.xlsx?concluidas=1&p=${token}&async=1`, {
+        headers: { Authorization: credentials },
+      });
+      assert.ok(inicio.status === 202 || inicio.ok);
+      for (let i = 0; i < 200; i++) {
+        const res = await fetch(`${appUrl}/api/progress/${token}`, {
+          headers: { Authorization: credentials },
+        });
+        const progresso = await res.json();
+        if (progresso.error) throw new Error(progresso.error);
+        if (progresso.done) return progresso;
+        await sleep(50);
+      }
+      throw new Error('a exportação não terminou a tempo');
+    };
+
+    const primeiro = await baixar('tok-linhas-1');
+    assert.equal(typeof primeiro.taskCount, 'number');
+
+    // O segundo vem do cache. Sem o taskCount aqui, a tela perdia o "· N
+    // linhas" e a contagem da linha voltava para o número do ClickUp.
+    const segundo = await baixar('tok-linhas-2');
+    assert.equal(segundo.cached, true, 'o segundo download tinha que vir do cache');
+    assert.equal(segundo.taskCount, primeiro.taskCount);
+  });
+
+  await test('trocar a caixa manda apurar sozinho o que falta', async () => {
+    const res = await fetch(`${appUrl}/api/contagens`, { headers: { Authorization: credentials } });
+    assert.equal(res.status, 200);
+    const { pendentes } = await res.json();
+    assert.equal(typeof pendentes, 'number');
+
+    // A lista 903 falha de propósito (página vazia no meio). As outras não
+    // podem ficar sem número por causa dela.
+    for (let i = 0; i < 300; i++) {
+      const lists = await (
+        await fetch(`${appUrl}/api/lists`, { headers: { Authorization: credentials } })
+      ).json();
+      const boas = lists.lists.filter((list) => list.id !== '903');
+      if (boas.every((list) => typeof list.contado.com === 'number')) {
+        for (const list of boas) {
+          assert.equal(typeof list.contado.sem, 'number', `${list.name} ficou sem o outro modo`);
+        }
+        return;
+      }
+      await sleep(50);
+    }
+    throw new Error('a fila não apurou todas as listas');
+  });
+
+  await test('apurar deixa o download pronto: baixar depois não toca na API', async () => {
+    const chamadas = () => requests.filter((r) => r.path.includes('/list/901/task')).length;
+
+    // Força uma apuração nova desta lista.
+    await fetch(`${appUrl}/api/lists?refresh=1`, { headers: { Authorization: credentials } });
+    await fetch(`${appUrl}/api/lists/901/contagem?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    const depoisDaApuracao = chamadas();
+
+    // Os dois modos saíram da mesma passada, então nenhum dos dois downloads
+    // pode voltar a paginar.
+    for (const concluidas of [1, 0]) {
+      const res = await fetch(`${appUrl}/api/lists/901/export.xlsx?concluidas=${concluidas}`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 200);
+      const buffer = Buffer.from(await res.arrayBuffer());
+      assert.ok(buffer.length > 0, 'o arquivo veio vazio');
+      assert.equal(buffer.subarray(0, 2).toString(), 'PK', 'não parece um .xlsx');
+    }
+
+    assert.equal(chamadas(), depoisDaApuracao, 'os downloads deveriam vir do disco');
+  });
+
+  await test('planilha que não pode ser escrita não impede a contagem', async () => {
+    // A lista 904 tem um campo customizado que só aparece na tarefa 150: a
+    // trava impede o arquivo, mas o número tem de sair.
+    const res = await fetch(`${appUrl}/api/lists/904/contagem?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(res.status, 200);
+    const { contado } = await res.json();
+    assert.equal(contado.com, 250);
+    assert.equal(typeof contado.sem, 'number');
+
+    // E o download continua falhando alto, em vez de entregar arquivo incompleto.
+    const download = await fetch(`${appUrl}/api/lists/904/export.xlsx?concluidas=1`, {
+      headers: { Authorization: credentials },
+    });
+    assert.equal(download.status, 500);
   });
 
   await test('a segunda contagem vem do cache, sem tocar na API', async () => {

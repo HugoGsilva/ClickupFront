@@ -17,8 +17,16 @@ const els = {
 };
 
 let allLists = [];
+let subtituloBase = '';
 
 const nf = new Intl.NumberFormat('pt-BR');
+
+/** Quantas listas ainda faltam apurar, ao lado do resumo do topo. */
+function pintarPendentes(pendentes) {
+  els.subtitle.textContent = pendentes
+    ? `${subtituloBase} · contando ${nf.format(pendentes)} lista${pendentes > 1 ? 's' : ''}…`
+    : subtituloBase;
+}
 
 /**
  * Os dois modos da caixa "Incluir tarefas concluídas". Marcar ou desmarcar
@@ -70,37 +78,110 @@ function pintarContagem(count, list) {
   if (typeof real === 'number') {
     count.textContent = nf.format(real);
     count.classList.add('row__count--real');
+    count.classList.remove('row__count--cru');
     count.title = filtro.contagemReal(nf.format(real));
     count.removeAttribute('role');
     count.removeAttribute('tabindex');
     return;
   }
 
+  // A fila do servidor está passando por esta lista agora.
+  if (list.contando) {
+    count.textContent = 'contando…';
+    count.classList.remove('row__count--real', 'row__count--cru');
+    count.classList.add('row__count--contando');
+    count.title = 'Apurando a contagem real desta lista.';
+    return;
+  }
+  count.classList.remove('row__count--contando');
+
   count.textContent = list.taskCount === null ? '—' : nf.format(list.taskCount);
   count.classList.remove('row__count--real');
+  // Número que ainda não foi apurado: é o do ClickUp, não o da planilha. Com a
+  // caixa marcada ele ficava com a mesma cara de um número real, e não havia
+  // como saber, olhando, qual dos dois se estava lendo.
+  count.classList.add('row__count--cru');
   count.title = filtro.contagem;
   count.setAttribute('role', 'button');
   count.setAttribute('tabindex', '0');
+}
+
+/**
+ * Acompanha uma contagem em andamento, mostrando o número subir na pílula.
+ *
+ * Contar a lista maior leva ~2 minutos: sem este acompanhamento a tela ficava
+ * em "contando…" parado, indistinguível de travada.
+ */
+function acompanharContagem(token, count) {
+  return new Promise((resolve, reject) => {
+    let tentativas = 0;
+    const espera = setInterval(async () => {
+      // ~18 minutos. Passou disso, alguma coisa se perdeu no caminho e é melhor
+      // devolver o controle para a pessoa do que girar para sempre.
+      if (++tentativas > 1200) {
+        clearInterval(espera);
+        reject(new Error('a contagem demorou demais. Tente de novo.'));
+        return;
+      }
+      try {
+        const res = await fetch(`/api/progress/${token}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const progresso = await res.json();
+        if (progresso.error) {
+          clearInterval(espera);
+          reject(new Error(progresso.error));
+        } else if (progresso.done) {
+          clearInterval(espera);
+          resolve(progresso.contado || null);
+        } else if (progresso.fetched) {
+          count.textContent = `${nf.format(progresso.fetched)}…`;
+        }
+      } catch {
+        /* erro de rede no polling: tenta de novo no próximo tique */
+      }
+    }, 900);
+  });
 }
 
 /** Pede ao servidor a contagem real desta lista no filtro que está valendo. */
 async function contar(list, count) {
   if (count.dataset.contando === '1') return;
   const modo = modoAtual();
+  const token =
+    crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
   count.dataset.contando = '1';
   count.classList.add('row__count--contando');
   count.textContent = 'contando…';
 
   try {
+    // Igual ao download: a requisição não fica aberta pelos minutos da
+    // varredura, então nenhum proxy no caminho derruba a contagem no meio.
     const res = await fetch(
-      `/api/lists/${encodeURIComponent(list.id)}/contagem?concluidas=${modo === 'com' ? 1 : 0}`,
+      `/api/lists/${encodeURIComponent(list.id)}/contagem?concluidas=${
+        modo === 'com' ? 1 : 0
+      }&p=${token}&async=1`,
       { cache: 'no-store' },
     );
-    if (!res.ok) throw await erroDe(res);
-    const { total } = await res.json();
+    if (!res.ok && res.status !== 202) throw await erroDe(res);
 
-    list.contado = { ...(list.contado || {}), [modo]: total };
+    // 202 = está contando agora. 200 = já estava no cache e veio na hora.
+    const { total, contado } =
+      res.status === 202
+        ? { contado: await acompanharContagem(token, count) }
+        : await res.json();
+
+    // O servidor apura os dois modos numa varredura só e manda os dois. Guardar
+    // ambos é o que faz a caixa "incluir concluídas" trocar o número na hora,
+    // sem contar de novo.
+    list.contado = { ...(list.contado || {}) };
+    if (typeof total === 'number') list.contado[modo] = total;
+    for (const outro of ['com', 'sem']) {
+      if (typeof contado?.[outro] === 'number') list.contado[outro] = contado[outro];
+    }
+    if (typeof list.contado[modo] !== 'number') {
+      throw new Error('a contagem terminou sem devolver o número. Tente de novo.');
+    }
   } catch (err) {
     showError(`${list.name}: ${err.message}`);
   } finally {
@@ -393,12 +474,14 @@ function baixarLista(list, { button, status, row }) {
 
 /** Traz do servidor as contagens reais já apuradas, sem re-renderizar a tela. */
 async function sincronizarContagens() {
+  if (!allLists.length) return;
   try {
     const res = await fetch('/api/lists', { cache: 'no-store' });
     if (!res.ok) return;
     const data = await res.json();
     const porId = new Map((data.lists || []).map((list) => [list.id, list]));
     for (const list of allLists) {
+      list.contando = Boolean(porId.get(list.id)?.contando);
       const novo = porId.get(list.id)?.contado || {};
       // Só os modos que o servidor sabe: `null` é "não contei ainda", e
       // sobrescrever com ele apagaria um número que a tela já tem.
@@ -411,6 +494,43 @@ async function sincronizarContagens() {
     aplicarFiltro();
   } catch {
     /* cosmético: sem isto o usuário só clica na contagem para ver o número */
+  }
+}
+
+/**
+ * Manda o servidor apurar o que falta e vai atualizando a tela conforme chega.
+ *
+ * Disparado ao marcar ou desmarcar a caixa: sem isto, a pessoa tinha de clicar
+ * número por número. Uma varredura resolve os dois modos, então isto só roda
+ * para as listas que ainda não foram contadas — e o que já foi apurado vale por
+ * uma hora, para todo mundo.
+ */
+let atualizacaoAtiva = false;
+
+async function atualizarContagens() {
+  if (atualizacaoAtiva || !allLists.length) return;
+  atualizacaoAtiva = true;
+
+  const faltando = () =>
+    allLists.filter((list) => typeof list.contado?.[modoAtual()] !== 'number').length;
+
+  try {
+    const res = await fetch('/api/contagens', { cache: 'no-store' });
+    if (!res.ok) return;
+
+    // As 19 listas levam ~12 minutos no pior caso. O teto aqui é folgado o
+    // bastante para isso e ainda assim finito, para a tela não ficar pendurada
+    // num servidor que parou de responder.
+    for (let i = 0; i < 700 && faltando(); i++) {
+      pintarPendentes(faltando());
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await sincronizarContagens();
+    }
+  } catch {
+    /* cosmético: o número continua clicável, um a um */
+  } finally {
+    atualizacaoAtiva = false;
+    pintarPendentes(0);
   }
 }
 
@@ -448,7 +568,8 @@ async function loadLists({ force = false } = {}) {
       document.title = `${data.folder.name} — Exportar tarefas`;
     }
     const total = allLists.reduce((sum, list) => sum + (list.taskCount || 0), 0);
-    els.subtitle.textContent = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
+    subtituloBase = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
+    pintarPendentes(0);
     els.tudoDetalhe.textContent = textoTudo();
     render();
   } catch (err) {
@@ -459,9 +580,21 @@ async function loadLists({ force = false } = {}) {
 }
 
 els.search.addEventListener('input', render);
-els.refresh.addEventListener('click', () => loadLists({ force: true }));
+els.refresh.addEventListener('click', async () => {
+  // "Atualizar" descarta as contagens guardadas, porque quem clica quer o
+  // estado novo do ClickUp. Sem a apuração logo em seguida, o botão fazia o
+  // contrário do que o nome promete: a pessoa clicava para atualizar os
+  // números e eles voltavam todos para o total cru do ClickUp.
+  await loadLists({ force: true });
+  atualizarContagens();
+});
 els.baixarTudo.addEventListener('click', baixarTudo);
-els.concluidas.addEventListener('change', aplicarFiltro);
+els.concluidas.addEventListener('change', () => {
+  // Repinta na hora com o que a tela já tem e manda apurar o que falta. O que
+  // já foi contado troca de número instantaneamente; o resto vai chegando.
+  aplicarFiltro();
+  atualizarContagens();
+});
 
 /** Estado inicial da caixa, definido por CLICKUP_INCLUDE_CLOSED no servidor. */
 async function carregarPadrao() {

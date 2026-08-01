@@ -298,10 +298,40 @@ Dá para sobrescrever sem tocar no código:
 | `CLICKUP_FOLDER_ID=<outra>` | aponta para outra pasta (o recorte fixo não se aplica a ela) |
 | `CLICKUP_LIST_IDS=<a,b,c>` | listas avulsas, de qualquer pasta |
 
-> A contagem que aparece ao lado de cada nome é o `task_count` do ClickUp, que
-> **não inclui subtarefas**. Como a exportação inclui, a planilha costuma ter
-> algumas linhas a mais — em DIVINO, 135 na tela e 137 na planilha. Verificado:
-> com `CLICKUP_INCLUDE_SUBTASKS=false` os dois números batem.
+> A contagem que aparece ao lado de cada nome começa sendo o `task_count` do
+> ClickUp, que **não inclui subtarefas** e não muda com o filtro de concluídas.
+> Como a exportação inclui, a planilha costuma ter algumas linhas a mais — em
+> DIVINO, 135 na tela e 137 na planilha. Verificado: com
+> `CLICKUP_INCLUDE_SUBTASKS=false` os dois números batem.
+>
+> Marcar ou desmarcar a caixa manda apurar sozinho o que ainda não tem número:
+> as listas entram numa fila, uma por vez, e as pílulas se atualizam conforme os
+> resultados chegam. Clicar num número apura aquela lista na frente da fila.
+>
+> **Apurar já deixa o download pronto.** Contar e exportar percorrem as mesmas
+> páginas — a única diferença é escrever as linhas em vez de descartá-las —,
+> então a mesma passada rende os dois números e as duas planilhas (com e sem
+> concluídas), sem nenhuma requisição a mais. Medido: uma lista de 2.124 tarefas
+> leva 18,7 s para apurar, e os dois downloads seguintes saem em 27 ms e 15 ms,
+> do disco. Em troca, o arquivo entregue é o da última apuração, não gerado no
+> instante do clique — o botão **Atualizar** descarta tudo e força a regeração.
+>
+> Se a planilha não puder ser escrita (um campo customizado aparecendo com valor
+> fora das primeiras 100 tarefas, que a trava recusa), a contagem ainda sai: só
+> o arquivo é descartado, e o download daquela lista volta a ser gerado sob
+> demanda — falhando alto ali, em vez de entregar planilha incompleta.
+>
+> A API do ClickUp não tem endpoint de contagem: o único jeito é paginar as
+> tarefas, então isso custa uma requisição a cada 100 tarefas e vale por
+> `CONTAGEM_CACHE_SECONDS` (1 hora). As 19 listas somam ~1.070 requisições e
+> ~12 minutos — por isso a validade é longa: com um valor curto, a contagem
+> expiraria antes de a rodada terminar e o app recontaria em loop. Como o corte
+> das concluídas é feito pelo app —
+> `include_closed=false` só remove os status do tipo `closed`, e os do tipo
+> `done` continuam vindo —, **uma varredura apura os dois modos de uma vez**.
+> Por isso marcar e desmarcar a caixa troca o número na hora, sem contar de
+> novo: medido, 9 requisições para as 845 tarefas de uma lista, tanto para um
+> número quanto para os dois.
 
 ## Achar os ids
 

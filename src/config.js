@@ -73,6 +73,12 @@ export const config = {
   port: Number(process.env.PORT || 3000),
   listsCacheSeconds: Number(process.env.LISTS_CACHE_SECONDS ?? 60),
   exportCacheSeconds: Number(process.env.EXPORT_CACHE_SECONDS ?? 300),
+
+  // Validade das contagens reais. Bem maior que a das planilhas de propósito:
+  // apurar as 19 listas leva ~12 minutos (uma requisição a cada 100 tarefas, no
+  // teto de 90/min), então uma validade curta expiraria antes de a rodada
+  // terminar e o app recontaria em loop, sem nunca ficar pronto.
+  contagemCacheSeconds: Number(process.env.CONTAGEM_CACHE_SECONDS ?? 3600),
 };
 
 /** Retorna a lista de problemas de configuração (vazia = tudo certo). */

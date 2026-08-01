@@ -50,6 +50,10 @@ services:
     networks:
       - network_swarm_public
     deploy:
+      # NÃO aumente. Cada réplica roda a sua própria rodada de apuração (~1.070
+      # requisições, ~12 minutos) e mantém o próprio cache em disco: com duas,
+      # seriam ~180 requisições/min contra o teto de 100 do token, e as duas
+      # levariam 429. Para aguentar mais acessos, aumente CPU/memória abaixo.
       replicas: 1
       update_config:
         parallelism: 1
