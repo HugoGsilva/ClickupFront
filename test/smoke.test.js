@@ -47,6 +47,9 @@ const { server: fake, base, requests } = await startFakeClickUp();
 // Também valem para este processo, que importa src/clickup.js direto em alguns testes.
 process.env.CLICKUP_API_BASE = base;
 process.env.CLICKUP_TOKEN = 'pk_token_de_teste';
+// Backoff de 25/50/100ms nos retries de 5xx, em vez de segundos reais. Precisa
+// estar setado antes do primeiro import de src/clickup.js (é lido no load).
+process.env.CLICKUP_RETRY_5XX_MS = '25';
 const port = 3999;
 const appUrl = `http://127.0.0.1:${port}`;
 
@@ -817,6 +820,138 @@ try {
       headers: { Authorization: credentials },
     });
     assert.equal(chamadas(), depois, 'a segunda deveria vir do cache');
+  });
+
+  console.log('\nResiliência a 5xx');
+
+  await test('500 transitório é repetido e a lista vem na segunda tentativa', async () => {
+    const { getList } = await import('../src/clickup.js');
+    const lista = await getList('905');
+    assert.equal(lista.name, 'LISTA INSTÁVEL');
+
+    const chamadas = requests.filter((r) => r.path.startsWith('/list/905')).length;
+    assert.equal(chamadas, 2, 'esperava exatamente 1 retry — nem desistir, nem repetir à toa');
+    // Um 500 não pode cair no caminho de view (isso é só para 400/404).
+    assert.ok(!requests.some((r) => r.path.startsWith('/view/905')), 'não deveria ter consultado /view');
+  });
+
+  await test('500 persistente desiste com mensagem amigável, sem vazar a infra do ClickUp', async () => {
+    const { getList } = await import('../src/clickup.js');
+    const antes = requests.filter((r) => r.path.startsWith('/list/906')).length;
+
+    await assert.rejects(
+      () => getList('906'),
+      (err) => {
+        assert.match(err.message, /ClickUp está com problemas/);
+        assert.doesNotMatch(err.message, /publicapi-hierarchy/, 'a infra interna do ClickUp vazou na mensagem');
+        return true;
+      },
+    );
+
+    const depois = requests.filter((r) => r.path.startsWith('/list/906')).length;
+    assert.equal(depois - antes, 4, 'esperava 1 chamada + 3 retries antes de desistir');
+  });
+
+  await test('a tela recebe a mensagem amigável quando o ClickUp está fora', async () => {
+    const tmpIsolado = await mkdtemp(path.join(tmpdir(), 'clickup-tmpdir-'));
+    const outraPorta = 3993;
+    const outro = spawn(process.execPath, ['src/server.js'], {
+      cwd: path.join(import.meta.dirname, '..'),
+      env: {
+        ...process.env,
+        CLICKUP_API_BASE: base,
+        CLICKUP_TOKEN: 'pk_token_de_teste',
+        CLICKUP_FOLDER_ID: '',
+        CLICKUP_LIST_IDS: '906',
+        AUTH_USER: USER,
+        AUTH_PASSWORD: PASSWORD,
+        PORT: String(outraPorta),
+        TMPDIR: tmpIsolado,
+        TEMP: tmpIsolado,
+        TMP: tmpIsolado,
+      },
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    try {
+      await waitForServer(`http://127.0.0.1:${outraPorta}/health`);
+      const res = await fetch(`http://127.0.0.1:${outraPorta}/api/lists`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(res.status, 500);
+      const body = await res.json();
+      assert.match(body.error, /ClickUp está com problemas/);
+      assert.doesNotMatch(body.error, /publicapi-hierarchy/);
+    } finally {
+      outro.kill();
+    }
+  });
+
+  await test('Atualizar que falha serve o catálogo anterior em vez de esvaziar a tela', async () => {
+    // Pasta "500-depois": a primeira carga funciona, todas as seguintes dão 500.
+    const tmpIsolado = await mkdtemp(path.join(tmpdir(), 'clickup-tmpdir-'));
+    const outraPorta = 3991;
+    const outro = spawn(process.execPath, ['src/server.js'], {
+      cwd: path.join(import.meta.dirname, '..'),
+      env: {
+        ...process.env,
+        CLICKUP_API_BASE: base,
+        CLICKUP_TOKEN: 'pk_token_de_teste',
+        CLICKUP_FOLDER_ID: '500-depois',
+        AUTH_USER: USER,
+        AUTH_PASSWORD: PASSWORD,
+        PORT: String(outraPorta),
+        LISTS_CACHE_SECONDS: '0',
+        EXPORT_CACHE_SECONDS: '300',
+        UNLINK_DELAY_MS: '50',
+        TMPDIR: tmpIsolado,
+        TEMP: tmpIsolado,
+        TMP: tmpIsolado,
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    outro.stderr.on('data', (c) => process.stderr.write(`  [stale] ${c}`));
+    const urlBase = `http://127.0.0.1:${outraPorta}`;
+    const tarefas901 = () => requests.filter((r) => r.path.startsWith('/list/901/task')).length;
+
+    try {
+      await waitForServer(`${urlBase}/health`);
+
+      // 1ª carga: o folder ainda responde — catálogo fresco, sem stale.
+      const primeira = await fetch(`${urlBase}/api/lists`, { headers: { Authorization: credentials } });
+      assert.equal(primeira.status, 200);
+      assert.equal((await primeira.json()).stale, false);
+
+      // Popula o cache de exportação da lista 901.
+      const download = await fetch(`${urlBase}/api/lists/901/export.xlsx`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(download.status, 200);
+      await download.arrayBuffer();
+      const depoisDoDownload = tarefas901();
+
+      // Atualizar: o folder agora só dá 500. A tela não pode esvaziar.
+      const refresh = await fetch(`${urlBase}/api/lists?refresh=1`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(refresh.status, 200, 'o catálogo de reserva deveria segurar o refresh falho');
+      const data = await refresh.json();
+      assert.equal(data.stale, true, 'faltou marcar que os dados são os anteriores');
+      assert.deepEqual(
+        data.lists.map((list) => list.name),
+        ['DIVANEIDE', 'ANA CAROLINA', 'LISTA QUE TRUNCA', 'LISTA CAMPO TARDIO'],
+      );
+
+      // O Atualizar falho não pode ter destruído a planilha guardada.
+      const deNovo = await fetch(`${urlBase}/api/lists/901/export.xlsx`, {
+        headers: { Authorization: credentials },
+      });
+      assert.equal(deNovo.status, 200);
+      await deNovo.arrayBuffer();
+      assert.equal(tarefas901(), depoisDoDownload, 'o refresh falho descartou o cache de exportação');
+    } finally {
+      outro.kill();
+    }
   });
 
   // Por último: este bloco bloqueia o IP de teste de propósito.

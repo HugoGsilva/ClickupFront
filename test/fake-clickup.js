@@ -97,9 +97,18 @@ function makeTask(listId, listName, index) {
   };
 }
 
+// Como o incidente real: corpo em texto puro vazando a infra interna do
+// ClickUp, não um JSON com "err".
+const CORPO_500 =
+  'Get "http://publicapi-hierarchy.hierarchy.svc.cluster.local/api/v2/list/x": net/http: timeout awaiting response headers';
+
 export function startFakeClickUp() {
   /** Tudo que o app pediu, para o teste provar que só houve leitura. */
   const requests = [];
+
+  // Instabilidade transitória: contadores por instância do fake.
+  let tentativas905 = 0; // /list/905 falha na 1ª chamada e passa nas seguintes
+  let chamadasFolderInstavel = 0; // /folder/500-depois passa na 1ª e falha depois
 
   const server = http.createServer((req, res) => {
     requests.push({ method: req.method, path: req.url });
@@ -108,9 +117,23 @@ export function startFakeClickUp() {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
     };
+    const enviar500 = () => {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end(CORPO_500);
+    };
 
     if (req.headers.authorization !== 'pk_token_de_teste') {
       return send({ err: 'Token invalid' }, 401);
+    }
+
+    // Pasta que sai do ar depois da primeira carga: exercita o catálogo de
+    // reserva servido quando "Atualizar" falha.
+    if (url.pathname === '/folder/500-depois') {
+      chamadasFolderInstavel++;
+      if (chamadasFolderInstavel === 1) {
+        return send({ id: '500-depois', name: 'Pasta Instável', lists: LISTS });
+      }
+      return enviar500();
     }
 
     const folderMatch = /^\/folder\/([^/]+)$/.exec(url.pathname);
@@ -134,6 +157,20 @@ export function startFakeClickUp() {
         return send({ view: { id: viewMatch[1], name: 'Pasta', parent: { id: '555', type: 5 } } });
       }
       return send({ err: 'View not found' }, 404);
+    }
+
+    // Soluço transitório: 500 na primeira chamada, sucesso nas seguintes.
+    // Fora de LISTS de propósito, para não mexer nos testes da pasta.
+    if (url.pathname === '/list/905') {
+      tentativas905++;
+      if (tentativas905 === 1) return enviar500();
+      return send({ id: '905', name: 'LISTA INSTÁVEL', task_count: 3, orderindex: 4 });
+    }
+
+    // Pane persistente: 500 sempre, para provar a desistência com mensagem
+    // amigável. Sem estado — pode ser usada por mais de um teste.
+    if (url.pathname === '/list/906') {
+      return enviar500();
     }
 
     const listMatch = /^\/list\/([^/]+)$/.exec(url.pathname);

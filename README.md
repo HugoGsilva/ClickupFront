@@ -268,6 +268,14 @@ O que o app faz para isso não virar problema:
   por `CLICKUP_REQS_POR_MINUTO` (padrão 90).
 - Mostra o progresso (`JAQUELINE (4/19) · 12.400 de ~92.511 tarefas`).
 - Espera e repete sozinho quando ainda assim toma 429.
+- **Repete sozinho os 5xx transitórios do ClickUp** (500/502/503/504): até 3
+  repetições com espera crescente (base ajustável por `CLICKUP_RETRY_5XX_MS`,
+  padrão 1000 ms — os testes usam 25). Se persistir, o usuário vê "O ClickUp
+  está com problemas neste momento. Aguarde um pouco e tente de novo." e o
+  detalhe técnico (que vaza a infra interna do ClickUp) fica só nos logs.
+- **"Atualizar" que falha não esvazia a tela**: o app serve a última versão do
+  catálogo com um aviso, e só descarta planilhas e contagens guardadas depois
+  de o refresh dar certo.
 - Guarda o arquivo por 5 minutos — baixar de novo é instantâneo.
 - Dois cliques na mesma coisa compartilham a mesma geração.
 - **Recusa entregar planilha incompleta**: se vierem menos tarefas do que o

@@ -251,6 +251,17 @@ async function erroDe(res) {
   return new Error(`Falha ao exportar (HTTP ${res.status}).`);
 }
 
+/**
+ * Fetch rejeitado (servidor fora do ar, sem internet) chega como TypeError com
+ * mensagem em inglês do navegador ("Failed to fetch"). Os erros do servidor já
+ * vêm em português — só o de rede precisa de tradução.
+ */
+function mensagemDe(err) {
+  return err instanceof TypeError
+    ? 'Sem conexão com o servidor. Verifique sua internet e tente de novo.'
+    : err.message;
+}
+
 function saveBlob(blob, fileName) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -365,7 +376,7 @@ async function baixar({ url: urlBase, button, status, bar, totalEsperado, nomeFa
     bar.style.width = '0';
     status.className += ' row__status--error';
     status.textContent = 'erro';
-    showError(`${nomeFallback.replace(/\.xlsx$/, '')}: ${err.message}`);
+    showError(`${nomeFallback.replace(/\.xlsx$/, '')}: ${mensagemDe(err)}`);
   } finally {
     clearInterval(poll);
     button.disabled = false;
@@ -451,10 +462,15 @@ async function loadLists({ force = false } = {}) {
     els.subtitle.textContent = `${nf.format(allLists.length)} listas · ${nf.format(total)} tarefas no total`;
     els.tudoDetalhe.textContent = textoTudo();
     render();
+    if (data.stale) {
+      showAviso(
+        'Não deu para atualizar com o ClickUp agora — mostrando a última versão carregada. Tente de novo em instantes.',
+      );
+    }
   } catch (err) {
     els.lists.innerHTML = '';
     els.title.textContent = 'Exportar tarefas';
-    showError(err.message);
+    showError(mensagemDe(err));
   }
 }
 

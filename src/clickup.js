@@ -75,6 +75,23 @@ const LIMITE_POR_MINUTO = (() => {
 const carimbos = [];
 let fila = Promise.resolve();
 
+/**
+ * Backoff do retry de 5xx transitório do ClickUp. Só os testes reduzem isto,
+ * para não esperar segundos reais a cada 500 simulado.
+ */
+const RETRY_5XX_BASE_MS = (() => {
+  const bruto = Number(process.env.CLICKUP_RETRY_5XX_MS);
+  if (Number.isFinite(bruto) && bruto > 0) return bruto;
+  if (process.env.CLICKUP_RETRY_5XX_MS) {
+    console.warn(`CLICKUP_RETRY_5XX_MS inválido ("${process.env.CLICKUP_RETRY_5XX_MS}"): usando 1000.`);
+  }
+  return 1000;
+})();
+
+// 501/505 são erro de implementação, não instabilidade: repetir não ajuda.
+const STATUS_TRANSITORIOS = new Set([500, 502, 503, 504]);
+const MSG_INSTABILIDADE = 'O ClickUp está com problemas neste momento. Aguarde um pouco e tente de novo.';
+
 async function aguardarVez() {
   const minhaVez = fila.then(async () => {
     for (;;) {
@@ -208,6 +225,19 @@ async function request(pathname, params = {}, attempt = 0) {
     return request(pathname, params, attempt + 1);
   }
 
+  // 5xx transitório (o ClickUp soluça de tempos em tempos): repetir resolve na
+  // enorme maioria das vezes, e é GET — seguro repetir. O contador é o mesmo da
+  // falha de rede: um orçamento único de tentativas para instabilidade.
+  if (STATUS_TRANSITORIOS.has(res.status) && attempt < 3) {
+    // Lê o corpo antes de repetir: libera a conexão do pool e dá o detalhe ao log.
+    const corpo = await res.text().catch(() => '');
+    console.warn(
+      `[clickup] ${res.status} em ${pathname} (tentativa ${attempt + 1}/4): ${corpo.slice(0, 300)} — repetindo…`,
+    );
+    await sleep(RETRY_5XX_BASE_MS * 2 ** attempt);
+    return request(pathname, params, attempt + 1);
+  }
+
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     let detail = body.slice(0, 300);
@@ -217,10 +247,19 @@ async function request(pathname, params = {}, attempt = 0) {
     } catch {
       /* corpo não-JSON, mantém o texto cru */
     }
-    const message =
-      res.status === 401
-        ? 'Token do ClickUp inválido ou sem permissão (CLICKUP_TOKEN).'
-        : `ClickUp respondeu ${res.status}: ${detail}`;
+
+    let message;
+    if (res.status === 401) {
+      message = 'Token do ClickUp inválido ou sem permissão (CLICKUP_TOKEN).';
+    } else if (STATUS_TRANSITORIOS.has(res.status)) {
+      // O detalhe vaza a infra interna do ClickUp (URLs de cluster, timeouts de
+      // serviço) e não ajuda o usuário em nada: fica só no log do servidor.
+      console.error(`[clickup] ${res.status} em ${pathname} persistiu após 4 tentativas: ${detail}`);
+      message = MSG_INSTABILIDADE;
+    } else {
+      // 400/404 mantêm o formato: getList depende do status para o caminho de view.
+      message = `ClickUp respondeu ${res.status}: ${detail}`;
+    }
     throw new ClickUpError(message, res.status);
   }
 

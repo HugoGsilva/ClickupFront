@@ -94,11 +94,32 @@ async function loadCatalog({ force = false } = {}) {
   const fresh = folderCache && Date.now() - folderCache.at < config.listsCacheSeconds * 1000;
   if (fresh && !force) return folderCache.data;
 
+  let catalog;
+  try {
+    catalog = await buscarCatalogo();
+  } catch (err) {
+    // ClickUp instável não pode esvaziar a tela: serve a última versão que deu
+    // certo, mesmo vencida. O `at` não é renovado, então a próxima chamada
+    // tenta o ClickUp de novo — o fallback é por requisição, não um estado.
+    if (folderCache) {
+      console.warn(
+        `[catálogo] atualização falhou (${err.message}); servindo a versão de ${new Date(folderCache.at).toISOString()}.`,
+      );
+      // Cópia rasa: gravar `stale` no objeto do cache faria o retorno `fresh`
+      // lá de cima entregar a marca para sempre, mesmo com o ClickUp já bom.
+      return { ...folderCache.data, stale: true };
+    }
+    throw err;
+  }
+
   if (force) {
     // Quem clica em "Atualizar" quer o estado novo do ClickUp. Recarregar só os
     // nomes e as contagens deixava as planilhas guardadas por 5 minutos
     // intactas: a pessoa via a contagem subir, baixava e recebia o arquivo
     // antigo — achando que estava atualizado.
+    //
+    // A limpeza fica DEPOIS do fetch de propósito: um "Atualizar" que falha no
+    // ClickUp não pode destruir as planilhas e contagens que ainda servem.
     for (const [chave, entry] of exportCache) {
       exportCache.delete(chave);
       apagarDepois(entry.filePath);
@@ -106,6 +127,11 @@ async function loadCatalog({ force = false } = {}) {
     contagemCache.clear();
   }
 
+  folderCache = { at: Date.now(), data: catalog };
+  return catalog;
+}
+
+async function buscarCatalogo() {
   let catalog;
   if (config.listIds.length) {
     // Listas avulsas vindas do ambiente: uma chamada por lista.
@@ -142,7 +168,6 @@ async function loadCatalog({ force = false } = {}) {
     }
   }
 
-  folderCache = { at: Date.now(), data: catalog };
   return catalog;
 }
 
@@ -271,6 +296,8 @@ app.get('/api/lists', async (req, res, next) => {
     const folder = await loadCatalog({ force: req.query.refresh === '1' });
     res.json({
       folder: { id: folder.id, name: folder.name },
+      // Catálogo de reserva: o refresh falhou e estes dados são os anteriores.
+      stale: Boolean(folder.stale),
       lists: folder.lists
         .slice()
         .sort((a, b) => a.orderindex - b.orderindex)
